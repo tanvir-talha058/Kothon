@@ -13,10 +13,10 @@ from typer import AutoTyper
 MODELS_DIR = Path("models")
 LANGUAGE_OPTIONS = ("Bangla", "English", "Banglish")
 RECOGNIZER_CACHE: dict[Path, OfflineSpeechRecognizer] = {}
-LANGUAGE_REQUIREMENTS = {
-    "Bangla": "Requires a Bangla-capable Vosk model in the models folder.",
-    "English": "Works with the current English Vosk model.",
-    "Banglish": "Requires a Bangla or multilingual Vosk model in the models folder.",
+LANGUAGE_HINTS = {
+    "Bangla": "Best with a Bangla-capable Vosk model. Falls back to the best available local model.",
+    "English": "Optimized for English dictation with the current local model.",
+    "Banglish": "Works with mixed Bangla-English speech and also normalizes common Banglish words.",
 }
 
 
@@ -159,7 +159,7 @@ class VoiceTyperApp:
         if not cleaned:
             return ""
 
-        if self.language == "Bangla":
+        if self.language in {"Bangla", "Banglish"}:
             return cleaned
 
         if cleaned.lower() == "i":
@@ -205,8 +205,8 @@ class VoiceTyperUI:
         self._pulse_job: str | None = None
 
         self.root.title("Kothon")
-        self.root.geometry("360x420")
-        self.root.minsize(340, 400)
+        self.root.geometry("340x292")
+        self.root.minsize(320, 280)
         self.root.configure(bg=self.BG)
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
         self.root.wm_attributes("-topmost", True)
@@ -215,7 +215,7 @@ class VoiceTyperUI:
         self._set_idle_state()
 
     def _build_ui(self) -> None:
-        outer = tk.Frame(self.root, bg=self.BG, padx=18, pady=18)
+        outer = tk.Frame(self.root, bg=self.BG, padx=12, pady=12)
         outer.pack(fill="both", expand=True)
 
         card = tk.Frame(
@@ -223,8 +223,8 @@ class VoiceTyperUI:
             bg=self.CARD,
             highlightbackground=self.BORDER,
             highlightthickness=1,
-            padx=20,
-            pady=20,
+            padx=14,
+            pady=14,
         )
         card.pack(fill="both", expand=True)
 
@@ -234,43 +234,45 @@ class VoiceTyperUI:
         tk.Label(
             top_row,
             text="Kothon",
-            font=("Segoe UI Semibold", 18),
+            font=("Segoe UI Semibold", 16),
             fg=self.TEXT,
             bg=self.CARD,
         ).pack(side="left")
 
         pin_badge = tk.Label(
             top_row,
-            text="Floating",
-            font=("Segoe UI", 9),
+            text="Compact",
+            font=("Segoe UI", 8),
             fg=self.MUTED,
             bg="#f8fafc",
-            padx=10,
-            pady=5,
+            padx=8,
+            pady=4,
         )
         pin_badge.pack(side="right")
 
+        subtitle_row = tk.Frame(card, bg=self.CARD)
+        subtitle_row.pack(fill="x", pady=(4, 10))
+
         tk.Label(
-            card,
-            text="Minimal offline voice typing",
-            font=("Segoe UI", 10),
+            subtitle_row,
+            text="Offline voice typing",
+            font=("Segoe UI", 9),
             fg=self.MUTED,
             bg=self.CARD,
-        ).pack(anchor="w", pady=(6, 18))
+        ).pack(side="left")
 
-        self.mic_canvas = tk.Canvas(
-            card,
-            width=120,
-            height=120,
-            bg=self.CARD,
-            highlightthickness=0,
+        self.status_badge = tk.Label(
+            subtitle_row,
+            textvariable=self.status_var,
+            font=("Segoe UI Semibold", 9),
+            padx=8,
+            pady=3,
             bd=0,
         )
-        self.mic_canvas.pack(pady=(0, 18))
-        self._build_mic_icon()
+        self.status_badge.pack(side="right")
 
         lang_row = tk.Frame(card, bg=self.CARD)
-        lang_row.pack(fill="x", pady=(0, 16))
+        lang_row.pack(fill="x", pady=(0, 10))
 
         for index, language in enumerate(LANGUAGE_OPTIONS):
             button = tk.Button(
@@ -280,28 +282,29 @@ class VoiceTyperUI:
                 font=("Segoe UI", 9),
                 relief="flat",
                 bd=0,
-                padx=10,
-                pady=8,
+                padx=8,
+                pady=7,
                 cursor="hand2",
             )
             button.grid(row=0, column=index, sticky="ew", padx=(0, 6 if index < len(LANGUAGE_OPTIONS) - 1 else 0))
             lang_row.grid_columnconfigure(index, weight=1)
             self.language_buttons[language] = button
 
-        self.status_badge = tk.Label(
+        self.mic_canvas = tk.Canvas(
             card,
-            textvariable=self.status_var,
-            font=("Segoe UI Semibold", 10),
-            padx=10,
-            pady=5,
+            width=64,
+            height=64,
+            bg=self.CARD,
+            highlightthickness=0,
             bd=0,
         )
-        self.status_badge.pack(anchor="center", pady=(0, 10))
+        self.mic_canvas.pack(pady=(0, 10))
+        self._build_mic_icon()
 
         tk.Label(
             card,
             textvariable=self.helper_var,
-            font=("Segoe UI", 10),
+            font=("Segoe UI", 9),
             fg=self.MUTED,
             bg=self.CARD,
             wraplength=270,
@@ -312,47 +315,48 @@ class VoiceTyperUI:
             card,
             textvariable=self.button_var,
             command=self.toggle_listening,
-            font=("Segoe UI Semibold", 11),
+            font=("Segoe UI Semibold", 10),
             bg=self.ACCENT,
             fg="white",
             activebackground=self.ACCENT_ACTIVE,
             activeforeground="white",
             relief="flat",
             bd=0,
-            padx=16,
-            pady=11,
+            padx=14,
+            pady=9,
             cursor="hand2",
         )
-        self.toggle_button.pack(fill="x", pady=(18, 12))
+        self.toggle_button.pack(fill="x", pady=(12, 8))
+
+        footer = tk.Frame(card, bg=self.CARD)
+        footer.pack(fill="x")
 
         tk.Label(
-            card,
+            footer,
             textvariable=self.model_var,
-            font=("Segoe UI", 9),
+            font=("Segoe UI", 8),
             fg=self.MUTED,
             bg=self.CARD,
-        ).pack(anchor="center")
+        ).pack(anchor="w")
 
         tk.Label(
-            card,
-            text="Keep the target text field focused before starting.",
-            font=("Segoe UI", 9),
+            footer,
+            text="Keep the target field focused.",
+            font=("Segoe UI", 8),
             fg=self.MUTED,
             bg=self.CARD,
-            wraplength=280,
-            justify="center",
-        ).pack(anchor="center", pady=(8, 0))
+        ).pack(anchor="w", pady=(4, 0))
 
         self._refresh_language_buttons()
 
     def _build_mic_icon(self) -> None:
         self.mic_canvas.delete("all")
-        self.mic_canvas.create_oval(14, 14, 106, 106, fill="#f8fafc", outline="")
-        self.mic_glow = self.mic_canvas.create_oval(26, 26, 94, 94, fill="#fee2e2", outline="")
-        self.mic_body = self.mic_canvas.create_oval(45, 28, 75, 68, fill=self.MIC_IDLE, outline="")
-        self.mic_stem = self.mic_canvas.create_rectangle(56, 68, 64, 84, fill=self.MIC_IDLE, outline="")
-        self.mic_base = self.mic_canvas.create_arc(40, 58, 80, 92, start=200, extent=140, style="arc", width=4, outline=self.MIC_IDLE)
-        self.mic_canvas.create_rectangle(48, 90, 72, 94, fill="#d1d5db", outline="")
+        self.mic_canvas.create_oval(4, 4, 60, 60, fill="#f8fafc", outline="")
+        self.mic_glow = self.mic_canvas.create_oval(12, 12, 52, 52, fill="#fee2e2", outline="")
+        self.mic_body = self.mic_canvas.create_oval(23, 12, 41, 36, fill=self.MIC_IDLE, outline="")
+        self.mic_stem = self.mic_canvas.create_rectangle(29, 36, 35, 45, fill=self.MIC_IDLE, outline="")
+        self.mic_base = self.mic_canvas.create_arc(18, 28, 46, 50, start=200, extent=140, style="arc", width=3, outline=self.MIC_IDLE)
+        self.mic_canvas.create_rectangle(23, 50, 41, 53, fill="#d1d5db", outline="")
         self._set_mic_idle()
 
     def _set_mic_idle(self) -> None:
@@ -393,14 +397,7 @@ class VoiceTyperUI:
     def _refresh_language_buttons(self) -> None:
         active_language = self.language_var.get()
         for language, button in self.language_buttons.items():
-            if not self.available_languages.get(language, False):
-                button.configure(
-                    bg="#f3f4f6",
-                    fg="#9ca3af",
-                    activebackground="#f3f4f6",
-                    activeforeground="#9ca3af",
-                )
-            elif language == active_language:
+            if language == active_language:
                 button.configure(
                     bg=self.ACTIVE_PILL,
                     fg=self.ACTIVE_PILL_TEXT,
@@ -418,7 +415,7 @@ class VoiceTyperUI:
     def _set_idle_state(self) -> None:
         self.status_var.set("Ready")
         selected_language = self.language_var.get()
-        self.helper_var.set(f"{selected_language} mode selected. {LANGUAGE_REQUIREMENTS[selected_language]}")
+        self.helper_var.set(f"{selected_language} mode selected. {LANGUAGE_HINTS[selected_language]}")
         self.button_var.set("Start")
         self.status_badge.configure(bg=self.READY_BG, fg=self.READY_TEXT)
         self.toggle_button.configure(bg=self.ACCENT, activebackground=self.ACCENT_ACTIVE)
@@ -441,19 +438,16 @@ class VoiceTyperUI:
         self._stop_mic_animation()
 
     def select_language(self, language: str) -> None:
-        if not self.available_languages.get(language, False):
-            message = LANGUAGE_REQUIREMENTS[language]
-            self._set_error_state(message)
-            self._refresh_language_buttons()
-            messagebox.showwarning("Kothon", message)
-            return
-
         try:
             self.app.set_language(language)
             self.language_var.set(language)
             self.model_var.set(f"Model: {self.app.model_path.name}")
             self._refresh_language_buttons()
             self._set_idle_state()
+            if not self.available_languages.get(language, False):
+                self.helper_var.set(
+                    f"{language} mode selected. Dedicated model not found, so Kothon is using {self.app.model_path.name}."
+                )
         except Exception as exc:
             self._set_error_state(str(exc))
             self._refresh_language_buttons()
