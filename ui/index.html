@@ -1,0 +1,555 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Kothon</title>
+<style>
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+
+:root {
+  --bg: #0a0a0f;
+  --border: rgba(255,255,255,0.08);
+  --p1: #7c3aed;
+  --p2: #a855f7;
+  --p3: #ec4899;
+  --cyan: #06b6d4;
+  --green: #22c55e;
+  --red: #ef4444;
+  --text: #f1f5f9;
+  --muted: #94a3b8;
+  --muted2: #475569;
+}
+
+html, body {
+  width: 100%; height: 100%;
+  background: var(--bg);
+  font-family: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  color: var(--text);
+  overflow: hidden;
+  -webkit-font-smoothing: antialiased;
+  user-select: none;
+}
+
+/* ── Background blobs ── */
+.blobs { position: fixed; inset: 0; z-index: 0; pointer-events: none; overflow: hidden; }
+.blob  { position: absolute; border-radius: 50%; filter: blur(72px); opacity: 0.13; will-change: transform; }
+.b1 { width: 380px; height: 380px; background: var(--p1); top: -140px; left: -100px; animation: d1 10s ease-in-out infinite; }
+.b2 { width: 260px; height: 260px; background: var(--p3); bottom: -80px; right: -60px;  animation: d2 13s ease-in-out infinite; }
+.b3 { width: 200px; height: 200px; background: var(--cyan); top: 55%; right: 15%;       animation: d3  8s ease-in-out infinite; }
+@keyframes d1 { 0%,100% { transform: translate(0,0) scale(1); } 50% { transform: translate(28px,-22px) scale(1.07); } }
+@keyframes d2 { 0%,100% { transform: translate(0,0) scale(1); } 50% { transform: translate(-18px,22px) scale(0.93); } }
+@keyframes d3 { 0%,100% { transform: translate(0,0) scale(1); } 50% { transform: translate(14px,-28px) scale(1.1); } }
+
+/* ── App shell ── */
+.app { position: relative; z-index: 1; width: 100%; height: 100vh; display: flex; flex-direction: column; }
+
+/* ── Title bar (drag region) ── */
+.titlebar {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 14px 16px 10px;
+  -webkit-app-region: drag; app-region: drag;
+  flex-shrink: 0;
+}
+.logo-group { display: flex; align-items: center; gap: 9px; }
+.logo-mark {
+  width: 30px; height: 30px; border-radius: 9px;
+  background: linear-gradient(135deg, var(--p1), var(--p3));
+  display: flex; align-items: center; justify-content: center;
+  box-shadow: 0 4px 12px rgba(124,58,237,0.4); flex-shrink: 0;
+}
+.logo-mark svg { width: 16px; height: 16px; color: #fff; }
+.logo-name {
+  font-size: 16px; font-weight: 700; letter-spacing: -0.03em;
+  background: linear-gradient(135deg, #fff 40%, var(--muted));
+  -webkit-background-clip: text; -webkit-text-fill-color: transparent; background-clip: text;
+}
+.badge {
+  font-size: 10px; color: var(--muted2);
+  background: rgba(255,255,255,0.05); border: 1px solid var(--border);
+  padding: 2px 7px; border-radius: 20px;
+}
+.win-controls {
+  display: flex; gap: 6px;
+  -webkit-app-region: no-drag; app-region: no-drag;
+}
+.win-btn {
+  width: 26px; height: 26px; border: none; border-radius: 7px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(255,255,255,0.05); color: var(--muted);
+  font-size: 13px; line-height: 1; transition: all 0.18s ease;
+}
+.win-btn:hover        { background: rgba(255,255,255,0.10); color: var(--text); }
+.win-btn.x:hover      { background: rgba(239,68,68,0.20);  color: var(--red);  }
+
+/* ── Divider ── */
+.divider { height: 1px; background: var(--border); margin: 0 16px; flex-shrink: 0; }
+
+/* ── Status strip ── */
+.status-strip { display: flex; align-items: center; gap: 7px; padding: 9px 16px; flex-shrink: 0; }
+.dot {
+  width: 7px; height: 7px; border-radius: 50%; background: var(--muted2);
+  flex-shrink: 0; transition: background 0.3s, box-shadow 0.3s;
+}
+.dot.listening { background: var(--green); box-shadow: 0 0 8px var(--green); animation: blink 1.4s ease-in-out infinite; }
+.dot.error     { background: var(--red);   box-shadow: 0 0 6px var(--red); }
+.dot.done      { background: var(--p2);    box-shadow: 0 0 6px var(--p2); }
+@keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+.status-text { font-size: 12px; color: var(--muted); transition: color 0.25s; }
+.status-text.listening { color: var(--green); }
+.status-text.error     { color: var(--red);   }
+.status-text.done      { color: var(--p2);    }
+
+/* ── Mic section ── */
+.mic-section {
+  flex: 1; display: flex; flex-direction: column;
+  align-items: center; justify-content: center;
+  padding: 8px 24px 0; position: relative; min-height: 0;
+}
+/* Pulse rings */
+.rings-wrap { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; pointer-events: none; }
+.ring { position: absolute; border-radius: 50%; border: 1.5px solid rgba(124,58,237,0.55); opacity: 0; }
+.ring.r1 { width: 115px; height: 115px; }
+.ring.r2 { width: 152px; height: 152px; }
+.ring.r3 { width: 190px; height: 190px; }
+.rings-wrap.active .r1 { animation: ring-out 2.2s ease-out infinite 0.0s; }
+.rings-wrap.active .r2 { animation: ring-out 2.2s ease-out infinite 0.5s; }
+.rings-wrap.active .r3 { animation: ring-out 2.2s ease-out infinite 1.0s; }
+@keyframes ring-out {
+  0%   { opacity: 0.75; transform: scale(0.72); border-color: rgba(168,85,247,0.7); }
+  100% { opacity: 0;    transform: scale(1.18); border-color: rgba(168,85,247,0);   }
+}
+
+/* Mic button */
+.mic-btn {
+  width: 90px; height: 90px; border-radius: 50%; border: none; cursor: pointer;
+  background: linear-gradient(150deg, #1c1c30, #191528);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.55), 0 0 0 1.5px rgba(124,58,237,0.22), inset 0 1px 0 rgba(255,255,255,0.07);
+  display: flex; align-items: center; justify-content: center;
+  position: relative; z-index: 1;
+  transition: transform 0.28s cubic-bezier(0.34,1.56,0.64,1), box-shadow 0.3s ease;
+}
+.mic-btn:hover {
+  transform: scale(1.07);
+  box-shadow: 0 14px 40px rgba(0,0,0,0.65), 0 0 0 1.5px rgba(168,85,247,0.45), 0 0 50px rgba(124,58,237,0.18), inset 0 1px 0 rgba(255,255,255,0.1);
+}
+.mic-btn:active { transform: scale(0.93); }
+.mic-btn.listening {
+  background: linear-gradient(150deg, #6d28d9, #9333ea 60%, #be185d);
+  box-shadow: 0 8px 32px rgba(109,40,217,0.55), 0 0 0 1.5px rgba(236,72,153,0.45), 0 0 70px rgba(124,58,237,0.28), inset 0 1px 0 rgba(255,255,255,0.2);
+  animation: mic-glow 2.5s ease-in-out infinite;
+}
+@keyframes mic-glow {
+  0%,100% { box-shadow: 0 8px 32px rgba(109,40,217,0.55), 0 0 0 1.5px rgba(236,72,153,0.45), 0 0 70px rgba(124,58,237,0.28), inset 0 1px 0 rgba(255,255,255,0.2); }
+  50%     { box-shadow: 0 8px 32px rgba(219,39,119,0.55), 0 0 0 1.5px rgba(168,85,247,0.55), 0 0 90px rgba(219,39,119,0.3),  inset 0 1px 0 rgba(255,255,255,0.2); }
+}
+.mic-svg { color: rgba(255,255,255,0.72); transition: all 0.3s; }
+.mic-btn.listening .mic-svg { color: #fff; filter: drop-shadow(0 0 5px rgba(255,255,255,0.45)); }
+.stop-svg { display: none; }
+.mic-btn.listening .mic-svg  { display: none; }
+.mic-btn.listening .stop-svg { display: block; }
+
+/* ── Waveform ── */
+.waveform { display: flex; align-items: center; gap: 3px; height: 48px; padding-top: 18px; }
+.bar {
+  width: 3px; height: 3px; border-radius: 3px;
+  background: linear-gradient(to top, var(--p1), var(--p2));
+  flex-shrink: 0;
+}
+/* CSS animation when listening but no real data yet */
+.waveform.active .bar {
+  animation: wave var(--d, 0.7s) ease-in-out infinite var(--o, 0s) alternate;
+}
+/* Real RMS data: smooth transition, no animation */
+.waveform.live .bar {
+  animation: none;
+  transition: height 0.18s ease;
+}
+@keyframes wave { from { height: 3px; } to { height: var(--h, 26px); } }
+
+/* ── Live text box ── */
+.live-box {
+  margin: 8px 16px 0;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.08);
+  border-radius: 11px;
+  padding: 9px 36px 9px 13px;
+  min-height: 52px; max-height: 76px;
+  overflow-y: auto; scrollbar-width: none;
+  font-size: 13px; line-height: 1.6; word-break: break-word;
+  position: relative; flex-shrink: 0;
+  opacity: 0; transform: translateY(-4px);
+  transition: opacity 0.28s ease, transform 0.28s ease;
+  pointer-events: none;
+}
+.live-box::-webkit-scrollbar { display: none; }
+.live-box.active  { opacity: 1; transform: translateY(0); pointer-events: auto; }
+.live-box.empty::before {
+  content: 'Listening for speech…';
+  color: rgba(148,163,184,0.3); font-style: italic; font-size: 12px;
+}
+#liveConfirmed { color: rgba(241,245,249,0.9); }
+#livePartial   { color: rgba(148,163,184,0.5); font-style: italic; }
+.live-cursor {
+  display: inline-block; width: 2px; height: 13px;
+  background: var(--p2); border-radius: 1px;
+  margin-left: 2px; vertical-align: middle;
+  animation: cur-blink 0.85s step-end infinite;
+}
+.live-box:not(.active) .live-cursor { display: none; }
+@keyframes cur-blink { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
+
+/* Copy button inside live box */
+.copy-btn {
+  position: absolute; top: 7px; right: 8px;
+  width: 22px; height: 22px; border: none; border-radius: 6px;
+  background: rgba(255,255,255,0.06); color: var(--muted2);
+  font-size: 11px; cursor: pointer; display: flex; align-items: center; justify-content: center;
+  transition: all 0.18s ease; flex-shrink: 0;
+  -webkit-app-region: no-drag; app-region: no-drag;
+}
+.copy-btn:hover { background: rgba(168,85,247,0.2); color: var(--p2); }
+.copy-btn.ok    { background: rgba(34,197,94,0.2);  color: var(--green); }
+
+/* ── Status message ── */
+.msg {
+  font-size: 12.5px; color: var(--muted); text-align: center;
+  line-height: 1.55; padding: 10px 28px 4px;
+  min-height: 40px; transition: color 0.25s; flex-shrink: 0;
+}
+.msg.success { color: #4ade80; }
+.msg.error   { color: var(--red); }
+
+/* ── Language selector ── */
+.lang-section { padding: 12px 16px 14px; flex-shrink: 0; }
+.lang-rail {
+  display: flex; gap: 6px;
+  background: rgba(255,255,255,0.03); padding: 4px; border-radius: 12px;
+  border: 1px solid var(--border);
+}
+.lang-pill {
+  flex: 1; padding: 9px 4px; border: none; border-radius: 8px;
+  font-size: 12px; font-weight: 500; cursor: pointer;
+  background: transparent; color: var(--muted);
+  letter-spacing: 0.01em; transition: all 0.22s ease;
+}
+.lang-pill:hover:not(.active):not(:disabled) { background: rgba(255,255,255,0.06); color: var(--text); }
+.lang-pill.active { background: linear-gradient(135deg, var(--p1), var(--p2)); color: #fff; box-shadow: 0 3px 12px rgba(124,58,237,0.38); }
+.lang-pill:disabled { opacity: 0.42; cursor: default; }
+
+/* ── Footer ── */
+.footer {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 16px 14px; border-top: 1px solid var(--border); flex-shrink: 0;
+}
+.model-tag {
+  font-size: 10px; color: var(--muted2);
+  background: rgba(255,255,255,0.04); border: 1px solid var(--border);
+  padding: 3px 9px; border-radius: 20px;
+  max-width: 185px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.hotkey-tag { font-size: 10px; color: var(--p2); opacity: 0.65; }
+</style>
+</head>
+<body>
+
+<div class="blobs">
+  <div class="blob b1"></div>
+  <div class="blob b2"></div>
+  <div class="blob b3"></div>
+</div>
+
+<div class="app">
+
+  <!-- Title bar -->
+  <div class="titlebar">
+    <div class="logo-group">
+      <div class="logo-mark">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
+          <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+          <line x1="12" y1="19" x2="12" y2="22"/>
+          <line x1="8"  y1="22" x2="16" y2="22"/>
+        </svg>
+      </div>
+      <span class="logo-name">Kothon</span>
+      <span class="badge">offline</span>
+    </div>
+    <div class="win-controls">
+      <button class="win-btn"   onclick="minWin()"   title="Minimise to tray">&#8722;</button>
+      <button class="win-btn x" onclick="closeWin()" title="Close">&#10005;</button>
+    </div>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- Status strip -->
+  <div class="status-strip">
+    <div class="dot" id="dot"></div>
+    <span class="status-text" id="statusText">Ready</span>
+  </div>
+
+  <div class="divider"></div>
+
+  <!-- Mic + waveform -->
+  <div class="mic-section">
+    <div class="rings-wrap" id="rings">
+      <div class="ring r1"></div>
+      <div class="ring r2"></div>
+      <div class="ring r3"></div>
+    </div>
+    <button class="mic-btn" id="micBtn" onclick="toggleListen()">
+      <svg class="mic-svg" width="35" height="35" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
+        <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
+        <line x1="12" y1="19" x2="12" y2="22"/>
+        <line x1="8"  y1="22" x2="16" y2="22"/>
+      </svg>
+      <svg class="stop-svg" width="28" height="28" viewBox="0 0 24 24" fill="currentColor">
+        <rect x="5" y="5" width="14" height="14" rx="3"/>
+      </svg>
+    </button>
+    <div class="waveform" id="wf"></div>
+  </div>
+
+  <!-- Live text box -->
+  <div class="live-box empty" id="liveBox">
+    <button class="copy-btn" id="copyBtn" onclick="copyTranscript()" title="Copy transcript">&#10697;</button>
+    <span id="liveConfirmed"></span><span id="livePartial"></span><span class="live-cursor"></span>
+  </div>
+
+  <!-- Status message -->
+  <div class="msg" id="msg">Choose a language below, then tap the mic</div>
+
+  <!-- Language pills -->
+  <div class="lang-section">
+    <div class="lang-rail" id="langRail"></div>
+  </div>
+
+  <!-- Footer -->
+  <div class="footer">
+    <span class="model-tag" id="modelTag">Loading…</span>
+    <span class="hotkey-tag">Ctrl+Shift+V</span>
+  </div>
+
+</div>
+
+<script>
+// ── Waveform setup ──────────────────────────────────────────────────────────
+const wfEl = document.getElementById('wf');
+// Pre-computed per-bar amplitude factor (sine curve gives natural spread)
+const BAR_FACTORS = Array.from({length: 24}, (_, i) =>
+  0.25 + 0.75 * Math.abs(Math.sin(i * 1.35 + 0.4))
+);
+for (let i = 0; i < 24; i++) {
+  const b = document.createElement('div');
+  b.className = 'bar';
+  b.style.setProperty('--h', Math.floor(Math.random() * 28 + 7) + 'px');
+  b.style.setProperty('--d', (Math.random() * 0.4 + 0.52).toFixed(2) + 's');
+  b.style.setProperty('--o', '-' + (Math.random() * 0.55).toFixed(2) + 's');
+  wfEl.appendChild(b);
+}
+
+// ── State ───────────────────────────────────────────────────────────────────
+let S = {
+  isListening: false,
+  language: 'Banglish',
+  model: '',
+  languages: ['Bangla', 'English', 'Banglish'],
+  hints: {},
+};
+let confirmedText = '';
+
+// ── Live text helpers ───────────────────────────────────────────────────────
+function onPartial(text) {
+  document.getElementById('livePartial').textContent = text ? ' ' + text : '';
+  const box = document.getElementById('liveBox');
+  box.classList.toggle('empty', !confirmedText && !text);
+  box.scrollTop = box.scrollHeight;
+}
+
+function onTyped(text) {
+  confirmedText += (confirmedText ? ' ' : '') + text;
+  document.getElementById('liveConfirmed').textContent = confirmedText;
+  document.getElementById('livePartial').textContent = '';
+  document.getElementById('liveBox').classList.remove('empty');
+  document.getElementById('liveBox').scrollTop = 999999;
+}
+
+function resetLive() {
+  confirmedText = '';
+  document.getElementById('liveConfirmed').textContent = '';
+  document.getElementById('livePartial').textContent = '';
+  document.getElementById('liveBox').classList.add('empty');
+}
+
+function copyTranscript() {
+  const text = confirmedText.trim();
+  if (!text) return;
+  navigator.clipboard.writeText(text).then(() => {
+    const btn = document.getElementById('copyBtn');
+    btn.classList.add('ok');
+    btn.textContent = '✓';
+    setTimeout(() => { btn.classList.remove('ok'); btn.innerHTML = '&#10697;'; }, 1800);
+  });
+}
+
+// ── Real waveform from RMS ──────────────────────────────────────────────────
+function onLevel(rms) {
+  const wf = document.getElementById('wf');
+  // First real data: switch from CSS animation to live mode
+  if (wf.classList.contains('active')) {
+    wf.classList.remove('active');
+    wf.classList.add('live');
+  }
+  if (!wf.classList.contains('live')) return;
+  const bars = wf.querySelectorAll('.bar');
+  bars.forEach((bar, i) => {
+    const h = Math.max(3, Math.round(rms * 40 * BAR_FACTORS[i]));
+    bar.style.height = h + 'px';
+  });
+}
+
+// ── Auto-stop from Python ───────────────────────────────────────────────────
+function onAutoStop(result) {
+  S.isListening = false;
+  setIdleUI();
+  if (result.success && result.text) {
+    setStatus('Done', 'done');
+    setMsg(`Auto-stopped. Typed: "${result.text}"`, 'success');
+  } else if (result.success) {
+    setMsg('Auto-stopped after silence. No speech detected.');
+  } else {
+    setStatus('Error', 'error');
+    setMsg(result.error || 'Auto-stop error.', 'error');
+  }
+}
+
+// ── Error from Python ───────────────────────────────────────────────────────
+function onError(msg) {
+  S.isListening = false;
+  setIdleUI();
+  setStatus('Error', 'error');
+  setMsg(msg, 'error');
+}
+
+// ── UI helpers ──────────────────────────────────────────────────────────────
+function setStatus(label, type = '') {
+  document.getElementById('dot').className        = 'dot'         + (type ? ' ' + type : '');
+  document.getElementById('statusText').className = 'status-text' + (type ? ' ' + type : '');
+  document.getElementById('statusText').textContent = label;
+}
+
+function setMsg(text, type = '') {
+  const el = document.getElementById('msg');
+  el.className   = 'msg' + (type ? ' ' + type : '');
+  el.textContent = text;
+}
+
+function buildPills() {
+  const rail = document.getElementById('langRail');
+  rail.innerHTML = '';
+  for (const lang of S.languages) {
+    const btn = document.createElement('button');
+    btn.className = 'lang-pill' + (lang === S.language ? ' active' : '');
+    btn.textContent = lang;
+    btn.disabled = S.isListening;
+    btn.onclick = () => pickLang(lang);
+    rail.appendChild(btn);
+  }
+}
+
+function setListeningUI() {
+  document.getElementById('micBtn').classList.add('listening');
+  document.getElementById('rings').classList.add('active');
+  // CSS animation until first onLevel()
+  wfEl.classList.remove('live');
+  wfEl.classList.add('active');
+  document.getElementById('liveBox').classList.add('active');
+  resetLive();
+  setStatus('Listening', 'listening');
+  setMsg(`Listening in ${S.language} mode — tap mic or wait for silence to stop`);
+  buildPills();
+}
+
+function setIdleUI() {
+  document.getElementById('micBtn').classList.remove('listening');
+  document.getElementById('rings').classList.remove('active');
+  wfEl.classList.remove('active', 'live');
+  // Reset bar heights
+  wfEl.querySelectorAll('.bar').forEach(b => b.style.height = '');
+  document.getElementById('liveBox').classList.remove('active');
+  document.getElementById('livePartial').textContent = '';
+  setStatus('Ready');
+  buildPills();
+}
+
+// ── Actions ─────────────────────────────────────────────────────────────────
+async function toggleListen() {
+  if (S.isListening) { await stopListen(); } else { await startListen(); }
+}
+
+async function startListen() {
+  const r = await window.pywebview.api.start_listening();
+  if (r.success) {
+    S.isListening = true;
+    setListeningUI();
+  } else {
+    setStatus('Error', 'error');
+    setMsg(r.error || 'Could not start microphone.', 'error');
+  }
+}
+
+async function stopListen() {
+  S.isListening = false;
+  setIdleUI();
+  setStatus('Processing…');
+  setMsg('Processing audio…');
+  const r = await window.pywebview.api.stop_listening();
+  if (r.success) {
+    if (r.text) {
+      setStatus('Done', 'done');
+      setMsg(`Typed: "${r.text}"`, 'success');
+    } else {
+      setMsg('No speech detected. Try speaking more clearly.');
+    }
+  } else {
+    setStatus('Error', 'error');
+    setMsg(r.error || 'An error occurred.', 'error');
+  }
+}
+
+async function pickLang(lang) {
+  if (S.isListening || lang === S.language) return;
+  const r = await window.pywebview.api.set_language(lang);
+  if (r.success) {
+    S.language = lang;
+    S.model    = r.model;
+    document.getElementById('modelTag').textContent = r.model;
+    buildPills();
+    setMsg(S.hints[lang] || '');
+  } else {
+    setMsg(r.error || 'Failed to switch language.', 'error');
+  }
+}
+
+async function minWin()   { await window.pywebview.api.minimize_window(); }
+async function closeWin() { await window.pywebview.api.close_app(); }
+
+// ── Init ─────────────────────────────────────────────────────────────────────
+async function init() {
+  await new Promise(resolve => {
+    if (window.pywebview) resolve();
+    else window.addEventListener('pywebviewready', resolve);
+  });
+  const s = await window.pywebview.api.get_state();
+  S = { ...S, ...s };
+  document.getElementById('modelTag').textContent = S.model;
+  buildPills();
+  setMsg(S.hints[S.language] || 'Choose a language below, then tap the mic');
+}
+
+init();
+</script>
+</body>
+</html>

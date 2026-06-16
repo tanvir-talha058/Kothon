@@ -1,4 +1,6 @@
 vosk
 sounddevice
-pyautogui
+pywebview
 keyboard
+pystray
+Pillow
