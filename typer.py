@@ -20,9 +20,24 @@ class KEYBDINPUT(ctypes.Structure):
     ]
 
 
+class MOUSEINPUT(ctypes.Structure):
+    _fields_ = [
+        ("dx", ctypes.c_long),
+        ("dy", ctypes.c_long),
+        ("mouseData", ctypes.c_uint),
+        ("dwFlags", ctypes.c_uint),
+        ("time", ctypes.c_uint),
+        ("dwExtraInfo", ctypes.c_void_p),
+    ]
+
+
 class _INPUTUNION(ctypes.Union):
+    # MOUSEINPUT must be present even though only ki is used: it is the largest
+    # member, and without it sizeof(INPUT) is 32 instead of the 40 bytes
+    # Windows expects — SendInput then rejects every event (invalid cbSize).
     _fields_ = [
         ("ki", KEYBDINPUT),
+        ("mi", MOUSEINPUT),
     ]
 
 

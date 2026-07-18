@@ -194,7 +194,6 @@ _WORD_REPLACEMENTS: dict[str, str] = {
     "dost": "দোস্ত",
     "bondhu": "বন্ধু",
     "manush": "মানুষ",
-    "chelে": "ছেলে",
     "chele": "ছেলে",
     "meye": "মেয়ে",
     "baccha": "বাচ্চা",
@@ -270,7 +269,6 @@ _WORD_REPLACEMENTS: dict[str, str] = {
     "shekhane": "সেখানে",
     "upore": "উপরে",
     "niche": "নিচে",
-    "shামনে": "সামনে",
     "shamne": "সামনে",
     "pechone": "পেছনে",
 
@@ -292,9 +290,36 @@ _WORD_REPLACEMENTS: dict[str, str] = {
 
 _TOKEN_RE = re.compile(r"[A-Za-z']+|[^A-Za-z']+")
 
+# Patterns compiled once at import — normalize_text runs per utterance
+_PUNCTUATION_PATTERNS = [
+    (re.compile(rf"\b{re.escape(cmd)}\b", flags=re.IGNORECASE), symbol)
+    for cmd, symbol in _PUNCTUATION_COMMANDS.items()
+]
+_PHRASE_PATTERNS = [
+    (re.compile(rf"\b{re.escape(source)}\b", flags=re.IGNORECASE), target)
+    for source, target in _PHRASE_REPLACEMENTS.items()
+]
+
 
 def _normalize_whitespace(text: str) -> str:
     return " ".join(text.split())
+
+
+def apply_punctuation(text: str) -> str:
+    """Replace spoken punctuation commands ("comma", "full stop", …) with symbols.
+
+    Language-independent — used directly for English mode, and as part of
+    normalize_text for Bangla/Banglish.
+    """
+    normalized = _normalize_whitespace(text)
+    for pattern, symbol in _PUNCTUATION_PATTERNS:
+        normalized = pattern.sub(symbol, normalized)
+    # Attach punctuation to the preceding word and hug parentheses
+    normalized = re.sub(r"[ \t]+([.,!?;:])", r"\1", normalized)
+    normalized = re.sub(r"\([ \t]+", "(", normalized)
+    normalized = re.sub(r"[ \t]+\)", ")", normalized)
+    normalized = re.sub(r"[ \t]*\n[ \t]*", "\n", normalized)
+    return normalized.strip()
 
 
 def normalize_text(text: str, is_partial: bool = False) -> str:
@@ -304,13 +329,10 @@ def normalize_text(text: str, is_partial: bool = False) -> str:
 
     if not is_partial:
         # Punctuation commands — only on complete segments
-        for cmd, symbol in _PUNCTUATION_COMMANDS.items():
-            pattern = re.compile(rf"\b{re.escape(cmd)}\b", flags=re.IGNORECASE)
-            normalized = pattern.sub(symbol, normalized)
+        normalized = apply_punctuation(normalized)
 
         # Multi-word phrase replacements — only on complete segments
-        for source, target in _PHRASE_REPLACEMENTS.items():
-            pattern = re.compile(rf"\b{re.escape(source)}\b", flags=re.IGNORECASE)
+        for pattern, target in _PHRASE_PATTERNS:
             normalized = pattern.sub(target, normalized)
 
     # Single-word replacements — always apply

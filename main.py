@@ -1,6 +1,9 @@
+import ctypes
+import ctypes.wintypes
 import json
-import math
 import queue
+import re
+import sys
 import threading
 import time
 from pathlib import Path
@@ -9,9 +12,9 @@ from typing import Any
 import webview
 
 import settings as _settings
-from banglish_fix import normalize_text
+from banglish_fix import apply_punctuation, normalize_text
 from recorder import AudioRecorder, _rms
-from stt import OfflineSpeechRecognizer
+from stt import create_recognizer
 from typer import AutoTyper
 
 try:
@@ -28,9 +31,18 @@ except ImportError:
     _HAS_TRAY = False
 
 
-MODELS_DIR = Path("models")
+__version__ = "0.2.0"
+
+# Frozen (PyInstaller): models live next to the exe, bundled assets in _MEIPASS
+_IS_FROZEN = getattr(sys, "frozen", False)
+_APP_DIR = Path(sys.executable).parent if _IS_FROZEN else Path(__file__).parent
+_ASSETS_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
+
+MODELS_DIR = _APP_DIR / "models"
+FULL_SIZE = (380, 600)
+COMPACT_SIZE = (296, 64)
 LANGUAGE_OPTIONS = ("Bangla", "English", "Banglish")
-RECOGNIZER_CACHE: dict[Path, OfflineSpeechRecognizer] = {}
+RECOGNIZER_CACHE: dict[Path, Any] = {}
 LANGUAGE_HINTS = {
     "Bangla": "Best with a Bangla-capable Vosk model. Falls back to the best available local model.",
     "English": "Optimized for English dictation with the current local model.",
@@ -62,7 +74,8 @@ def resolve_model_path(language: str) -> Path:
     preferred_map: dict[str, tuple[tuple[str, ...], ...]] = {
         "Bangla":   (("bangla",), ("bn",), ("vosk-model-small",)),
         "English":  (("english",), ("en",), ("vosk-model-small-en",), ("vosk-model-small",)),
-        "Banglish": (("banglish",), ("multilingual",), ("bangla", "english"), ("vosk-model-small",)),
+        # Banglish is romanized speech: recognize as English, then transliterate
+        "Banglish": (("banglish",), ("multilingual",), ("bangla", "english"), ("en",), ("vosk-model-small",)),
     }
     for keywords in preferred_map.get(language, ()):
         match = _find_matching_model(*keywords)
@@ -90,11 +103,83 @@ def has_dedicated_model(language: str) -> bool:
     )
 
 
-def get_recognizer(model_path: Path) -> OfflineSpeechRecognizer:
+def get_recognizer(model_path: Path) -> Any:
     resolved = model_path.resolve()
     if resolved not in RECOGNIZER_CACHE:
-        RECOGNIZER_CACHE[resolved] = OfflineSpeechRecognizer(model_path=resolved)
+        RECOGNIZER_CACHE[resolved] = create_recognizer(resolved)
     return RECOGNIZER_CACHE[resolved]
+
+
+# ── Foreground-window tracker ────────────────────────────────────────────────
+#
+# Kothon is a clickable webview window: pressing the mic button focuses Kothon
+# itself, so plain SendInput would type into Kothon instead of the field the
+# user was dictating into. This tracks the last non-Kothon foreground window
+# and restores focus to it immediately before typing.
+
+class ForegroundTracker:
+    def __init__(self, poll_interval: float = 0.15) -> None:
+        user32 = ctypes.windll.user32
+        kernel32 = ctypes.windll.kernel32
+        user32.GetForegroundWindow.restype = ctypes.wintypes.HWND
+        user32.GetWindowThreadProcessId.argtypes = [
+            ctypes.wintypes.HWND, ctypes.POINTER(ctypes.wintypes.DWORD)
+        ]
+        user32.GetWindowThreadProcessId.restype = ctypes.wintypes.DWORD
+        user32.SetForegroundWindow.argtypes = [ctypes.wintypes.HWND]
+        user32.SetForegroundWindow.restype = ctypes.wintypes.BOOL
+        user32.IsWindow.argtypes = [ctypes.wintypes.HWND]
+        user32.IsWindow.restype = ctypes.wintypes.BOOL
+        user32.AttachThreadInput.argtypes = [
+            ctypes.wintypes.DWORD, ctypes.wintypes.DWORD, ctypes.wintypes.BOOL
+        ]
+        user32.AttachThreadInput.restype = ctypes.wintypes.BOOL
+        self._user32 = user32
+        self._kernel32 = kernel32
+        self._own_pid = kernel32.GetCurrentProcessId()
+        self._poll_interval = poll_interval
+        self._last_external_hwnd: int | None = None
+        self._running = False
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if self._running:
+            return
+        self._running = True
+        self._thread = threading.Thread(target=self._loop, daemon=True)
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._running = False
+
+    def _loop(self) -> None:
+        pid = ctypes.wintypes.DWORD()
+        while self._running:
+            hwnd = self._user32.GetForegroundWindow()
+            if hwnd:
+                self._user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                if pid.value and pid.value != self._own_pid:
+                    self._last_external_hwnd = hwnd
+            time.sleep(self._poll_interval)
+
+    def restore(self) -> None:
+        """Bring the last external window back to the foreground before typing."""
+        hwnd = self._last_external_hwnd
+        if not hwnd or not self._user32.IsWindow(hwnd):
+            self._last_external_hwnd = None
+            return
+        if self._user32.GetForegroundWindow() == hwnd:
+            return
+        cur_thread = self._kernel32.GetCurrentThreadId()
+        target_thread = self._user32.GetWindowThreadProcessId(hwnd, None)
+        # SetForegroundWindow alone is blocked by Windows' focus-steal guard;
+        # attaching input queues briefly is the standard workaround.
+        self._user32.AttachThreadInput(cur_thread, target_thread, True)
+        try:
+            self._user32.SetForegroundWindow(hwnd)
+        finally:
+            self._user32.AttachThreadInput(cur_thread, target_thread, False)
+        time.sleep(0.03)
 
 
 # ── Core app ──────────────────────────────────────────────────────────────────
@@ -106,9 +191,13 @@ class VoiceTyperApp:
         self.typer = AutoTyper()
         self.is_listening = False
         self.worker_thread: threading.Thread | None = None
+        # Serializes start/stop across UI, hotkey, tray, and auto-stop threads
+        self._state_lock = threading.Lock()
         self.language = language
         self.model_path = model_path
         self.recognizer = get_recognizer(model_path)
+        # Restores focus to the field the user was dictating into before typing
+        self.focus_tracker: ForegroundTracker | None = None
         # Callbacks wired by Api
         self.on_partial = None
         self.on_typed = None
@@ -128,23 +217,26 @@ class VoiceTyperApp:
         self._flush_queue()
 
     def start_listening(self) -> None:
-        if self.is_listening:
-            return
-        self._speech_chunks = 0
-        self._silence_chunks = 0
-        self.is_listening = True
-        self.recorder.on_level = self.on_level
-        self.recorder.on_error = self._on_recorder_error
-        self.recorder.start()
-        self.worker_thread = threading.Thread(
-            target=self._process_audio_loop, daemon=True
-        )
-        self.worker_thread.start()
+        with self._state_lock:
+            if self.is_listening:
+                return
+            self._speech_chunks = 0
+            self._silence_chunks = 0
+            self.recorder.on_level = self.on_level
+            self.recorder.on_error = self._on_recorder_error
+            self.recorder.start()
+            # Only mark listening once the mic is actually open
+            self.is_listening = True
+            self.worker_thread = threading.Thread(
+                target=self._process_audio_loop, daemon=True
+            )
+            self.worker_thread.start()
 
     def stop_listening(self) -> str:
-        if not self.is_listening:
-            return ""
-        self.is_listening = False
+        with self._state_lock:
+            if not self.is_listening:
+                return ""
+            self.is_listening = False
         self.recorder.on_level = None
         self.recorder.stop()
         if self.worker_thread and self.worker_thread.is_alive():
@@ -155,9 +247,12 @@ class VoiceTyperApp:
             final_text = ""
         if self.language in {"Bangla", "Banglish"}:
             final_text = normalize_text(final_text)
+        else:
+            final_text = apply_punctuation(final_text)
         cleaned = self._cleanup_text(final_text)
         if cleaned:
             print(f"Typed ({self.language}): {cleaned}")
+            self._restore_focus()
             self.typer.type_text(cleaned + " ")
         self._flush_queue()
         return cleaned
@@ -190,7 +285,7 @@ class VoiceTyperApp:
                 elif self._speech_chunks >= _MIN_SPEECH_CHUNKS:
                     self._silence_chunks += 1
                     if self._silence_chunks >= _SILENCE_CHUNKS_TO_STOP:
-                        if self.on_auto_stop:
+                        if self.is_listening and self.on_auto_stop:
                             self.on_auto_stop()
                         break
 
@@ -199,11 +294,14 @@ class VoiceTyperApp:
                 if text:
                     if self.language in {"Bangla", "Banglish"}:
                         text = normalize_text(text)
+                    else:
+                        text = apply_punctuation(text)
                     cleaned = self._cleanup_text(text)
                     if cleaned:
                         print(f"Typed ({self.language}): {cleaned}")
                         if self.on_typed:
                             self.on_typed(cleaned)
+                        self._restore_focus()
                         self.typer.type_text(cleaned + " ")
                 else:
                     partial = self.recognizer.get_partial_text()
@@ -217,8 +315,17 @@ class VoiceTyperApp:
                 if self.on_error:
                     self.on_error(str(exc))
 
+    def _restore_focus(self) -> None:
+        if self.focus_tracker:
+            try:
+                self.focus_tracker.restore()
+            except Exception:
+                pass
+
     def _cleanup_text(self, text: str) -> str:
-        cleaned = " ".join(text.split()).strip()
+        # Collapse spaces/tabs but keep newlines from the "new line" command
+        cleaned = re.sub(r"[ \t]+", " ", text)
+        cleaned = re.sub(r" ?\n ?", "\n", cleaned).strip()
         if not cleaned:
             return ""
         if self.language in {"Bangla", "Banglish"}:
@@ -244,8 +351,10 @@ def _make_tray_image() -> "Image.Image":
 # ── pywebview API ─────────────────────────────────────────────────────────────
 
 class Api:
-    def __init__(self, app: VoiceTyperApp) -> None:
+    def __init__(self, app: VoiceTyperApp, theme: str = "night", compact: bool = False) -> None:
         self._app = app
+        self._theme = theme if theme in {"day", "night"} else "night"
+        self._compact = bool(compact)
         self._window: webview.Window | None = None
         self._tray: Any = None
         self._last_level_t: float = 0.0
@@ -268,7 +377,28 @@ class Api:
             "languages": list(LANGUAGE_OPTIONS),
             "hints": LANGUAGE_HINTS,
             "dedicated": {lang: has_dedicated_model(lang) for lang in LANGUAGE_OPTIONS},
+            "theme": self._theme,
+            "compact": self._compact,
+            "version": __version__,
         }
+
+    def set_theme(self, theme: str) -> dict:
+        if theme not in {"day", "night"}:
+            return {"success": False, "error": f"Unknown theme: {theme}"}
+        self._theme = theme
+        _settings.save({"theme": theme})
+        return {"success": True}
+
+    def set_compact(self, is_compact: bool) -> dict:
+        try:
+            self._compact = bool(is_compact)
+            if self._window:
+                width, height = COMPACT_SIZE if self._compact else FULL_SIZE
+                self._window.resize(width, height)
+            _settings.save({"compact": self._compact, **self._window_pos()})
+            return {"success": True}
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
 
     def start_listening(self) -> dict:
         try:
@@ -295,14 +425,25 @@ class Api:
             return {"success": False, "error": str(exc)}
 
     def minimize_window(self) -> None:
-        if self._window:
+        if not self._window:
+            return
+        # Without a tray icon there is no way to bring a hidden window back
+        if self._tray:
             self._window.hide()
+        else:
+            self._window.minimize()
 
     def close_app(self) -> None:
-        _settings.save({"language": self._app.language, **self._window_pos()})
+        _settings.save({
+            "language": self._app.language,
+            "compact": self._compact,
+            **self._window_pos(),
+        })
         try:
             self._app.stop_listening()
         finally:
+            if self._app.focus_tracker:
+                self._app.focus_tracker.stop()
             if self._tray:
                 try:
                     self._tray.stop()
@@ -333,6 +474,9 @@ class Api:
         threading.Thread(target=self._do_auto_stop, daemon=True).start()
 
     def _do_auto_stop(self) -> None:
+        # A manual stop may have won the race — don't override its result
+        if not self._app.is_listening:
+            return
         result = self.stop_listening()
         self._js(f"onAutoStop({json.dumps(result)})")
 
@@ -389,24 +533,42 @@ class Api:
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
+def _fatal(message: str) -> None:
+    print(message, file=sys.stderr)
+    try:
+        ctypes.windll.user32.MessageBoxW(None, message, "Kothon", 0x10)  # MB_ICONERROR
+    except Exception:
+        pass
+    sys.exit(1)
+
+
 def main() -> None:
     saved = _settings.load()
     default_language = saved.get("language", "Banglish")
     win_x = saved.get("window_x")
     win_y = saved.get("window_y")
 
-    model_path = resolve_model_path(default_language)
-    app = VoiceTyperApp(model_path=model_path, language=default_language)
-    api = Api(app)
+    try:
+        model_path = resolve_model_path(default_language)
+        app = VoiceTyperApp(model_path=model_path, language=default_language)
+    except FileNotFoundError as exc:
+        _fatal(
+            f"{exc}\n\nExpected location: {MODELS_DIR}\n"
+            "Download a Vosk/sherpa model and place its folder there, then start Kothon again."
+        )
+        return
+    is_compact = bool(saved.get("compact", False))
+    api = Api(app, theme=saved.get("theme", "night"), compact=is_compact)
 
-    ui_path = Path(__file__).parent / "ui" / "index.html"
+    ui_path = _ASSETS_DIR / "ui" / "index.html"
+    start_width, start_height = COMPACT_SIZE if is_compact else FULL_SIZE
 
     create_kwargs: dict = dict(
         title="Kothon",
         url=ui_path.as_uri(),
         js_api=api,
-        width=380,
-        height=600,
+        width=start_width,
+        height=start_height,
         resizable=False,
         frameless=True,
         on_top=True,
@@ -421,6 +583,10 @@ def main() -> None:
     window = webview.create_window(**create_kwargs)
     api.set_window(window)
     api.setup_tray()
+
+    focus_tracker = ForegroundTracker()
+    focus_tracker.start()
+    app.focus_tracker = focus_tracker
 
     if _HAS_KEYBOARD:
         try:

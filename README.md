@@ -1,196 +1,91 @@
-# Voice Typer (Offline)
+# Kothon — Offline Voice Typer
 
-An offline voice typing tool for Windows that listens through your microphone, converts speech to text with Vosk, applies simple Banglish normalization, and types the result into the active application.
+An offline voice-typing app for Windows. Speak in **Bangla, English, or Banglish**; Kothon converts your speech to text locally with [Vosk](https://alphacephei.com/vosk/), applies Banglish→Bangla normalization, and types the result into whatever application is focused.
 
-This project is intended for **Bangla, English, and Banglish** input. Bangla recognition quality depends heavily on the Vosk model you place in the project.
+No internet required — all processing happens on your machine.
 
 ## Features
 
-- Fully offline speech-to-text
-- Hotkey-based start and stop control
-- Automatic typing into the active window
-- Simple Banglish-to-Bangla normalization rules
-- Lightweight Python setup for Windows 10
-
-## How It Works
-
-1. `recorder.py` captures microphone audio.
-2. `stt.py` sends audio chunks to Vosk for offline recognition.
-3. `banglish_fix.py` normalizes common Banglish words and phrases.
-4. `main.py` cleans the text and sends it to `typer.py`.
-5. `typer.py` types the final text into the currently focused app.
+- Fully offline speech-to-text (Vosk)
+- Small always-on-top GUI with live transcript, waveform, and language switcher
+- Three language modes: **Bangla**, **English**, **Banglish** (mixed speech with automatic Banglish→Bangla word conversion)
+- Auto-types into the active window using native Windows `SendInput` (Unicode-safe, works with Bangla text)
+- Global hotkey **Ctrl+Shift+V** to start/stop from anywhere
+- Auto-stop after ~2.5 s of silence
+- System tray icon (minimize to tray, quick start/stop, quit)
+- Spoken punctuation in Bangla/Banglish modes: "comma", "full stop", "question mark", "new line", etc.
+- Copy button to grab the whole transcript
+- Remembers your language choice and window position (`~/.kothon/settings.json`)
 
 ## Requirements
 
-- Windows 10
-- Python 3.10+ recommended
+- Windows 10/11
+- Python 3.10+
 - A working microphone
-- A downloaded Vosk model placed in the correct folder
+- A Vosk model in the `models/` folder (see below)
 
 ## Installation
-
-### 1. Install Python dependencies
-
-From the project folder:
 
 ```bash
 pip install -r requirements.txt
 ```
 
-`requirements.txt` contains only the needed packages:
+Dependencies: `vosk`, `sounddevice`, `pywebview`, `keyboard`, `pystray`, `Pillow`.
+(`keyboard`, `pystray`, and `Pillow` are optional — without them you lose the global hotkey and tray icon, but the app still runs.)
 
-- `vosk`
-- `sounddevice`
-- `pyautogui`
-- `keyboard`
+### Download a Vosk model
 
-### 2. Download a Vosk model
-
-Download a Vosk speech recognition model and place it at:
-
-```text
-models/vosk-model-small
-```
-
-The app expects that exact folder path by default.
-
-Example structure:
+Get a model from https://alphacephei.com/vosk/models and extract it into `models/`, e.g.:
 
 ```text
 Kothon/
-├── models/
-│   └── vosk-model-small/
-│       ├── am/
-│       ├── conf/
-│       ├── graph/
-│       └── ...
+└── models/
+    └── vosk-model-small-en-us-0.15/
 ```
 
-Important notes:
+The app auto-discovers models by folder name — no exact name is required. It picks the best match for the selected language:
 
-- If you use an English-only model, Bangla recognition will not work well.
-- For Bangla or mixed-language use, choose a Vosk model that supports the language you want.
-- Banglish normalization only adjusts recognized text after speech recognition. It does not replace the need for a suitable Bangla-capable model.
+- **English** — any folder containing `english` or `en` (e.g. `vosk-model-small-en-us-0.15`)
+- **Bangla** — a folder containing `bangla` or `bn` (e.g. `vosk-model-small-bn-0.4`). **Without a Bangla model, Bangla mode falls back to the English model and recognition will be poor.**
+- **Banglish** — a `banglish`/`multilingual` model if present, otherwise falls back to whatever is available
 
-## Running the App
+## Usage
 
 ```bash
 python main.py
 ```
 
-When the program starts, it waits for the hotkey and runs in the console.
-
-## Hotkeys
-
-- `Ctrl+Shift+V` - Start or stop voice typing
-- `Esc` - Exit the application
-
-## Usage
-
-1. Open any application where you want text to be typed.
-2. Run `python main.py`.
-3. Press `Ctrl+Shift+V` to begin recording.
-4. Speak clearly into your microphone.
-5. Press `Ctrl+Shift+V` again to stop recording.
-6. The recognized text is typed into the active window automatically.
+1. Pick a language mode with the pills at the bottom.
+2. Click into the app where you want text typed (editor, browser, chat…).
+3. Tap the mic button or press **Ctrl+Shift+V** and speak.
+4. Recognized text is typed into the focused window as you go. Stop with the mic button, the hotkey, or just pause — it auto-stops after silence.
 
 ## Project Structure
 
 ```text
 Kothon/
-├── main.py             # Application entry point and hotkey loop
-├── recorder.py         # Microphone audio capture
-├── stt.py              # Offline speech recognition with Vosk
-├── banglish_fix.py     # Banglish normalization rules
-├── typer.py            # Automatic typing with pyautogui
-├── requirements.txt    # Python dependencies
-├── README.md           # Project documentation
-├── project plan.md     # Original project plan
-└── models/
-    └── vosk-model-small/
+├── main.py           # App core, model resolution, pywebview API, tray, hotkey
+├── recorder.py       # Microphone capture (sounddevice)
+├── stt.py            # Vosk recognizer wrapper
+├── banglish_fix.py   # Banglish→Bangla + spoken-punctuation rules
+├── typer.py          # Unicode typing via Windows SendInput
+├── settings.py       # Persisted settings (~/.kothon/settings.json)
+├── ui/index.html     # GUI (pywebview)
+└── models/           # Vosk models (you download these)
 ```
-
-## File Responsibilities
-
-- `main.py`
-  - Creates the queue and app components
-  - Registers the hotkey
-  - Starts/stops recording
-  - Cleans recognized text before typing
-
-- `recorder.py`
-  - Records raw microphone audio using `sounddevice`
-  - Pushes audio chunks into a queue
-
-- `stt.py`
-  - Loads the Vosk model from `models/vosk-model-small`
-  - Accepts audio chunks and returns finalized text
-
-- `banglish_fix.py`
-  - Replaces common Banglish words and phrases with Bangla text where possible
-
-- `typer.py`
-  - Types output text into the active application
-
-## Limitations
-
-- Bangla support depends on the Vosk model you install.
-- Recognition accuracy depends on microphone quality, pronunciation, and background noise.
-- Banglish normalization is simple and rule-based, so many words will remain unchanged.
-- The app types into whichever window is currently focused, so make sure the correct target application is active.
-- Global hotkeys and automatic typing may require appropriate permissions on some systems.
 
 ## Troubleshooting
 
-### Model not found
-
-If the app reports that the Vosk model is missing, verify that this folder exists:
-
-```text
-models/vosk-model-small
-```
-
-Do not leave the downloaded model under a different folder name unless you also change the code.
-
-### Nothing is being typed
-
-Check the following:
-
-- The target application window is focused
-- The microphone is connected and working
-- Recording was started with `Ctrl+Shift+V`
-- Speech recognition is producing text in the console output
-
-### Hotkey does not respond
-
-Possible causes:
-
-- The `keyboard` package may need administrator privileges on some Windows systems
-- Another application may already be using the same hotkey
-- Security software may block global keyboard hooks
-
-Try running the terminal as Administrator if needed.
-
-### Microphone problems
-
-If recording fails:
-
-- Confirm the correct input device is available in Windows
-- Close other software that may be exclusively using the microphone
-- Check Windows microphone privacy settings
-
-### Bangla output is poor or missing
-
-This usually means the selected Vosk model does not support Bangla well enough. Use a Bangla-capable or multilingual model if you want better Bangla recognition.
-
-### Typed text appears in the wrong place
-
-`pyautogui` types into the active window. Click the destination field before starting dictation.
+- **"No Vosk model found"** — put an extracted model folder inside `models/` (the folder containing `am/`, `conf/`, `graph/`…, not the zip).
+- **Hotkey doesn't work** — the `keyboard` package may need the terminal run as Administrator; another app may own Ctrl+Shift+V.
+- **Nothing is typed** — make sure the target window is focused and check the console for recognition output.
+- **Bangla output is poor** — install a Bangla-capable Vosk model; the bundled English model cannot recognize Bangla speech. Banglish word conversion only fixes spelling of romanized words the recognizer got right.
+- **Mic errors** — check Windows microphone privacy settings and that no app holds the mic exclusively.
 
 ## Privacy
 
-All speech processing is designed to run locally on your machine. No cloud service is required for recognition.
+All recognition runs locally. No audio or text ever leaves your machine.
 
-## Notes
+## License
 
-This repository currently uses a simple root-level file layout rather than a package structure. All main modules are imported directly from the project root, matching the current implementation in `main.py`.
+MIT

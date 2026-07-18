@@ -15,7 +15,9 @@ def load() -> dict:
 
 def save(data: dict) -> None:
     try:
+        # Merge so partial saves (e.g. a language switch) keep unrelated keys
+        merged = {**load(), **data}
         _PATH.parent.mkdir(parents=True, exist_ok=True)
-        _PATH.write_text(json.dumps(data, indent=2), encoding="utf-8")
+        _PATH.write_text(json.dumps(merged, indent=2), encoding="utf-8")
     except Exception:
         pass

@@ -1,4 +1,6 @@
 vosk
+sherpa-onnx
+numpy
 sounddevice
 pywebview
 keyboard

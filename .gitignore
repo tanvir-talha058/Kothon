@@ -1,0 +1,16 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Vosk models — users download their own (see models/README.txt)
+models/*.zip
+models/*/
+
+# Build output
+build/
+dist/
+installer/
+
+# Local settings
+.kothon/
