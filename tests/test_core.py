@@ -37,6 +37,10 @@ class TestApplyPunctuation(unittest.TestCase):
         self.assertEqual(apply_punctuation(""), "")
         self.assertEqual(apply_punctuation("   "), "")
 
+    def test_dash_keeps_single_spaces(self):
+        # " — " replacement must not leave doubled spaces around the dash
+        self.assertEqual(apply_punctuation("wait dash go"), "wait — go")
+
 
 class TestNormalizeText(unittest.TestCase):
     def test_word_replacement(self):
@@ -134,6 +138,13 @@ class TestSettings(unittest.TestCase):
         self.assertEqual(data.get("theme"), "day")
         self.assertEqual(data.get("language"), "English")
 
+    def test_save_leaves_no_temp_file(self):
+        # save() writes via a temp file + atomic replace; the temp must not linger
+        self.settings.save({"language": "Bangla"})
+        leftovers = [p for p in self.settings._PATH.parent.iterdir() if p.suffix == ".tmp"]
+        self.assertEqual(leftovers, [])
+        self.assertEqual(self.settings.load()["language"], "Bangla")
+
     def test_corrupt_file_returns_empty(self):
         self.settings._PATH.parent.mkdir(parents=True, exist_ok=True)
         self.settings._PATH.write_text("{not json", encoding="utf-8")
@@ -159,6 +170,53 @@ class TestModelResolution(unittest.TestCase):
         import main
         # Any language string should still resolve to some available model
         self.assertTrue(main.resolve_model_path("Klingon").exists())
+
+
+class TestUserDict(unittest.TestCase):
+    def _write(self, tmp, payload):
+        p = Path(tmp) / "custom_words.json"
+        p.write_text(payload, encoding="utf-8")
+        return p
+
+    def test_loads_words_and_phrases(self):
+        import json
+        from banglish_fix import load_user_dict
+        with tempfile.TemporaryDirectory() as tmp:
+            p = self._write(tmp, json.dumps(
+                {"words": {"Tanvir": "তানভীর"}, "phrases": {"ki obostha": "কি অবস্থা"}}
+            ))
+            words, phrases = load_user_dict(p)
+            self.assertEqual(words, {"tanvir": "তানভীর"})   # keys lowercased
+            self.assertEqual(phrases, {"ki obostha": "কি অবস্থা"})
+
+    def test_missing_file_is_empty(self):
+        from banglish_fix import load_user_dict
+        self.assertEqual(load_user_dict(Path("does/not/exist.json")), ({}, {}))
+
+    def test_malformed_file_is_ignored(self):
+        from banglish_fix import load_user_dict
+        with tempfile.TemporaryDirectory() as tmp:
+            p = self._write(tmp, "{broken json")
+            self.assertEqual(load_user_dict(p), ({}, {}))
+
+
+class TestWindowsIntegration(unittest.TestCase):
+    def test_hotkey_label(self):
+        from main import hotkey_label
+        self.assertEqual(hotkey_label("ctrl+shift+v"), "Ctrl+Shift+V")
+        self.assertEqual(hotkey_label("ctrl + alt + k"), "Ctrl+Alt+K")
+
+    def test_single_instance_mutex(self):
+        # First acquire wins; acquiring the same named mutex again reports taken
+        from main import acquire_single_instance
+        self.assertTrue(acquire_single_instance())
+        self.assertFalse(acquire_single_instance())
+
+    def test_autostart_command_quotes_paths(self):
+        from main import _autostart_command
+        cmd = _autostart_command()
+        self.assertTrue(cmd.startswith('"'))
+        self.assertIn("python", cmd.lower())
 
 
 class TestTyperStructs(unittest.TestCase):

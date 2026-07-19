@@ -1,6 +1,13 @@
 from __future__ import annotations
 
+import json
 import re
+from pathlib import Path
+
+# Users can extend/override the built-in dictionary without touching code:
+# ~/.kothon/custom_words.json
+#   {"words": {"tanvir": "তানভীর"}, "phrases": {"ki obostha": "কি অবস্থা"}}
+USER_DICT_PATH = Path.home() / ".kothon" / "custom_words.json"
 
 # ── Multi-word phrase → Bangla ────────────────────────────────────────────────
 _PHRASE_REPLACEMENTS: dict[str, str] = {
@@ -173,7 +180,7 @@ _WORD_REPLACEMENTS: dict[str, str] = {
     "thik": "ঠিক",
     "daroon": "দারুণ",
     "oshhadharon": "অসাধারণ",
-    "shoja": "সহজ",
+    "shoja": "সোজা",
     "kothin": "কঠিন",
     "duto": "দুটো",
     "tinta": "তিনটা",
@@ -290,14 +297,40 @@ _WORD_REPLACEMENTS: dict[str, str] = {
 
 _TOKEN_RE = re.compile(r"[A-Za-z']+|[^A-Za-z']+")
 
+
+def load_user_dict(path: Path = USER_DICT_PATH) -> tuple[dict[str, str], dict[str, str]]:
+    """Read the user's custom (words, phrases) mappings; malformed files are ignored."""
+    try:
+        if not path.exists():
+            return {}, {}
+        data = json.loads(path.read_text(encoding="utf-8"))
+        words = {
+            str(k).lower(): str(v)
+            for k, v in (data.get("words") or {}).items() if str(k).strip()
+        }
+        phrases = {
+            str(k).lower(): str(v)
+            for k, v in (data.get("phrases") or {}).items() if str(k).strip()
+        }
+        return words, phrases
+    except Exception:
+        return {}, {}
+
+
+_USER_WORDS, _USER_PHRASES = load_user_dict()
+_WORD_REPLACEMENTS.update(_USER_WORDS)   # user entries override built-ins
+
 # Patterns compiled once at import — normalize_text runs per utterance
 _PUNCTUATION_PATTERNS = [
     (re.compile(rf"\b{re.escape(cmd)}\b", flags=re.IGNORECASE), symbol)
     for cmd, symbol in _PUNCTUATION_COMMANDS.items()
 ]
+# User phrases run first (and replace same-key built-ins), so they always win
+_all_phrases = {**_PHRASE_REPLACEMENTS, **_USER_PHRASES}
+_ordered_phrases = list(_USER_PHRASES) + [k for k in _all_phrases if k not in _USER_PHRASES]
 _PHRASE_PATTERNS = [
-    (re.compile(rf"\b{re.escape(source)}\b", flags=re.IGNORECASE), target)
-    for source, target in _PHRASE_REPLACEMENTS.items()
+    (re.compile(rf"\b{re.escape(source)}\b", flags=re.IGNORECASE), _all_phrases[source])
+    for source in _ordered_phrases
 ]
 
 
@@ -319,6 +352,9 @@ def apply_punctuation(text: str) -> str:
     normalized = re.sub(r"\([ \t]+", "(", normalized)
     normalized = re.sub(r"[ \t]+\)", ")", normalized)
     normalized = re.sub(r"[ \t]*\n[ \t]*", "\n", normalized)
+    # Symbols that carry their own spacing (e.g. "dash" → " — ") can leave
+    # doubled spaces once neighbours are joined
+    normalized = re.sub(r"[ \t]{2,}", " ", normalized)
     return normalized.strip()
 
 

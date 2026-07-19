@@ -13,9 +13,13 @@ No internet required — all processing happens on your machine.
 - Global hotkey **Ctrl+Shift+V** to start/stop from anywhere
 - Auto-stop after ~2.5 s of silence
 - System tray icon (minimize to tray, quick start/stop, quit)
-- Spoken punctuation in Bangla/Banglish modes: "comma", "full stop", "question mark", "new line", etc.
+- Spoken punctuation in all modes: "comma", "full stop", "question mark", "new line", etc.
 - Copy button to grab the whole transcript
-- Remembers your language choice and window position (`~/.kothon/settings.json`)
+- **Mini bar**: the minimize button collapses Kothon to a small always-on-top dock (waveform + mic + timer) so you can dictate anywhere without the full window
+- **Custom dictionary**: add your own Banglish→Bangla words and phrases in `~/.kothon/custom_words.json` — user entries override the built-ins
+- Day/night theme, custom hotkey, optional start-with-Windows (tray menu)
+- Single-instance guard — launching Kothon twice just points you at the running copy
+- Remembers language, theme, hotkey, and window position (`~/.kothon/settings.json`); activity log at `~/.kothon/kothon.log`
 
 ## Requirements
 
@@ -70,9 +74,29 @@ Kothon/
 ├── banglish_fix.py   # Banglish→Bangla + spoken-punctuation rules
 ├── typer.py          # Unicode typing via Windows SendInput
 ├── settings.py       # Persisted settings (~/.kothon/settings.json)
+├── applog.py         # Rotating file log (~/.kothon/kothon.log)
 ├── ui/index.html     # GUI (pywebview)
-└── models/           # Vosk models (you download these)
+├── assets/           # Icon + logo (regenerate with assets/make_logo.py)
+├── tests/            # Unit + integration tests (python -m pytest tests/)
+└── models/           # STT models (you download these)
 ```
+
+## Customization
+
+**Custom words** — create `~/.kothon/custom_words.json`:
+
+```json
+{
+  "words":   { "tanvir": "তানভীর" },
+  "phrases": { "ki obostha": "কি অবস্থা" }
+}
+```
+
+Entries apply in Bangla/Banglish modes and take priority over the built-in dictionary. Restart Kothon after editing.
+
+**Hotkey** — add `"hotkey": "ctrl+alt+k"` (any [keyboard](https://github.com/boppreh/keyboard) combo) to `~/.kothon/settings.json`. Invalid combos fall back to Ctrl+Shift+V.
+
+**Start with Windows** — right-click the tray icon → "Start with Windows".
 
 ## Troubleshooting
 

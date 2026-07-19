@@ -1,8 +1,10 @@
-vosk
-sherpa-onnx
-numpy
-sounddevice
-pywebview
-keyboard
-pystray
-Pillow
+# Pinned to the versions the release build is tested with.
+# Loosen deliberately (and re-test) rather than by accident.
+vosk==0.3.45
+sherpa-onnx==1.13.4
+numpy==2.3.5
+sounddevice==0.5.5
+pywebview==6.2.1
+keyboard==0.13.5
+pystray==0.19.5
+Pillow==11.3.0

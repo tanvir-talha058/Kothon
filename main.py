@@ -1,6 +1,7 @@
 import ctypes
 import ctypes.wintypes
 import json
+import logging
 import queue
 import re
 import sys
@@ -11,6 +12,7 @@ from typing import Any
 
 import webview
 
+import applog
 import settings as _settings
 from banglish_fix import apply_punctuation, normalize_text
 from recorder import AudioRecorder, _rms
@@ -33,6 +35,8 @@ except ImportError:
 
 __version__ = "0.2.0"
 
+_LOG = logging.getLogger("kothon.app")
+
 # Frozen (PyInstaller): models live next to the exe, bundled assets in _MEIPASS
 _IS_FROZEN = getattr(sys, "frozen", False)
 _APP_DIR = Path(sys.executable).parent if _IS_FROZEN else Path(__file__).parent
@@ -40,7 +44,7 @@ _ASSETS_DIR = Path(getattr(sys, "_MEIPASS", Path(__file__).parent))
 
 MODELS_DIR = _APP_DIR / "models"
 FULL_SIZE = (380, 600)
-COMPACT_SIZE = (296, 64)
+COMPACT_SIZE = (322, 64)
 LANGUAGE_OPTIONS = ("Bangla", "English", "Banglish")
 RECOGNIZER_CACHE: dict[Path, Any] = {}
 LANGUAGE_HINTS = {
@@ -209,12 +213,13 @@ class VoiceTyperApp:
         self._silence_chunks = 0
 
     def set_language(self, language: str) -> None:
-        if self.is_listening:
-            raise RuntimeError("Stop listening before switching language.")
-        self.language = language
-        self.model_path = resolve_model_path(language)
-        self.recognizer = get_recognizer(self.model_path)
-        self._flush_queue()
+        with self._state_lock:
+            if self.is_listening:
+                raise RuntimeError("Stop listening before switching language.")
+            self.language = language
+            self.model_path = resolve_model_path(language)
+            self.recognizer = get_recognizer(self.model_path)
+            self._flush_queue()
 
     def start_listening(self) -> None:
         with self._state_lock:
@@ -233,32 +238,36 @@ class VoiceTyperApp:
             self.worker_thread.start()
 
     def stop_listening(self) -> str:
+        # Hold the lock for the whole teardown: releasing it after only
+        # flipping the flag lets a concurrent start_listening slip in and
+        # have its freshly started recorder stopped by this call's tail.
+        # The worker thread never takes this lock, so joining it here is safe.
         with self._state_lock:
             if not self.is_listening:
                 return ""
             self.is_listening = False
-        self.recorder.on_level = None
-        self.recorder.stop()
-        if self.worker_thread and self.worker_thread.is_alive():
-            self.worker_thread.join(timeout=1.0)
-        try:
-            final_text = self.recognizer.finalize_text()
-        except Exception:
-            final_text = ""
-        if self.language in {"Bangla", "Banglish"}:
-            final_text = normalize_text(final_text)
-        else:
-            final_text = apply_punctuation(final_text)
-        cleaned = self._cleanup_text(final_text)
-        if cleaned:
-            print(f"Typed ({self.language}): {cleaned}")
-            self._restore_focus()
-            self.typer.type_text(cleaned + " ")
-        self._flush_queue()
-        return cleaned
+            self.recorder.on_level = None
+            self.recorder.stop()
+            if self.worker_thread and self.worker_thread.is_alive():
+                self.worker_thread.join(timeout=1.0)
+            try:
+                final_text = self.recognizer.finalize_text()
+            except Exception:
+                final_text = ""
+            if self.language in {"Bangla", "Banglish"}:
+                final_text = normalize_text(final_text)
+            else:
+                final_text = apply_punctuation(final_text)
+            cleaned = self._cleanup_text(final_text)
+            if cleaned:
+                _LOG.info("Typed (%s): %s", self.language, cleaned)
+                self._restore_focus()
+                self.typer.type_text(cleaned + " ")
+            self._flush_queue()
+            return cleaned
 
     def _on_recorder_error(self, message: str) -> None:
-        print(f"Recorder error: {message}")
+        _LOG.error("Recorder error: %s", message)
         if self.on_error:
             self.on_error(message)
 
@@ -298,7 +307,7 @@ class VoiceTyperApp:
                         text = apply_punctuation(text)
                     cleaned = self._cleanup_text(text)
                     if cleaned:
-                        print(f"Typed ({self.language}): {cleaned}")
+                        _LOG.info("Typed (%s): %s", self.language, cleaned)
                         if self.on_typed:
                             self.on_typed(cleaned)
                         self._restore_focus()
@@ -311,7 +320,7 @@ class VoiceTyperApp:
                         self.on_partial(partial)
 
             except Exception as exc:
-                print(f"Audio loop error: {exc}")
+                _LOG.exception("Audio loop error: %s", exc)
                 if self.on_error:
                     self.on_error(str(exc))
 
@@ -335,26 +344,94 @@ class VoiceTyperApp:
         return cleaned[0].upper() + cleaned[1:] if len(cleaned) > 1 else cleaned.upper()
 
 
+# ── Windows integration helpers ───────────────────────────────────────────────
+
+_MUTEX_NAME = "Kothon.SingleInstance.Mutex"
+_ERROR_ALREADY_EXISTS = 183
+_mutex_handle = None   # held for the process lifetime
+
+
+def acquire_single_instance() -> bool:
+    """Return False if another Kothon instance already holds the mutex."""
+    global _mutex_handle
+    kernel32 = ctypes.windll.kernel32
+    _mutex_handle = kernel32.CreateMutexW(None, False, _MUTEX_NAME)
+    return kernel32.GetLastError() != _ERROR_ALREADY_EXISTS
+
+
+_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+_RUN_VALUE = "Kothon"
+
+
+def _autostart_command() -> str:
+    if _IS_FROZEN:
+        return f'"{sys.executable}"'
+    return f'"{sys.executable}" "{Path(__file__).resolve()}"'
+
+
+def is_autostart_enabled() -> bool:
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, _RUN_KEY) as key:
+            winreg.QueryValueEx(key, _RUN_VALUE)
+        return True
+    except OSError:
+        return False
+
+
+def set_autostart(enabled: bool) -> None:
+    import winreg
+    try:
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER, _RUN_KEY, 0, winreg.KEY_SET_VALUE
+        ) as key:
+            if enabled:
+                winreg.SetValueEx(key, _RUN_VALUE, 0, winreg.REG_SZ, _autostart_command())
+            else:
+                winreg.DeleteValue(key, _RUN_VALUE)
+        _LOG.info("Start with Windows %s", "enabled" if enabled else "disabled")
+    except OSError:
+        _LOG.exception("Could not update the Start-with-Windows registry entry")
+
+
+def hotkey_label(hotkey: str) -> str:
+    """'ctrl+shift+v' → 'Ctrl+Shift+V' for UI display."""
+    return "+".join(part.strip().capitalize() for part in hotkey.split("+"))
+
+
 # ── Tray icon ─────────────────────────────────────────────────────────────────
 
 def _make_tray_image() -> "Image.Image":
-    img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
+    """Kothon mark: waveform strokes hanging from a matra headstroke.
+
+    Geometry mirrors assets/make_logo.py (the .ico/.png/.svg generator);
+    drawn here so the tray icon needs no bundled asset. Rendered at 256
+    and downscaled so the 16-32px tray sizes stay crisp.
+    """
+    ink, jade = (11, 16, 13, 255), (61, 214, 140, 255)
+    img = Image.new("RGBA", (256, 256), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
-    draw.ellipse([2, 2, 62, 62], fill=(124, 58, 237, 255))
-    draw.rounded_rectangle([22, 10, 42, 36], radius=9, fill=(255, 255, 255, 220))
-    draw.rectangle([29, 36, 35, 47], fill=(255, 255, 255, 220))
-    draw.arc([18, 30, 46, 52], start=0, end=180, fill=(255, 255, 255, 220), width=3)
-    draw.rectangle([29, 50, 35, 54], fill=(255, 255, 255, 220))
-    return img
+    draw.rounded_rectangle([0, 0, 256, 256], radius=58, fill=ink)
+    for x, h, rise in ((74, 72, 0), (117, 104, 32), (160, 52, 0)):
+        draw.rounded_rectangle([x, 88 - rise, x + 22, 88 + h], radius=11, fill=jade)
+    draw.rounded_rectangle([52, 88, 204, 110], radius=11, fill=jade)
+    return img.resize((64, 64), Image.LANCZOS)
 
 
 # ── pywebview API ─────────────────────────────────────────────────────────────
 
 class Api:
-    def __init__(self, app: VoiceTyperApp, theme: str = "night", compact: bool = False) -> None:
+    def __init__(
+        self,
+        app: VoiceTyperApp,
+        theme: str = "night",
+        compact: bool = False,
+        hotkey: str = "ctrl+shift+v",
+    ) -> None:
         self._app = app
         self._theme = theme if theme in {"day", "night"} else "night"
         self._compact = bool(compact)
+        self._hotkey = hotkey
         self._window: webview.Window | None = None
         self._tray: Any = None
         self._last_level_t: float = 0.0
@@ -380,6 +457,7 @@ class Api:
             "theme": self._theme,
             "compact": self._compact,
             "version": __version__,
+            "hotkey": hotkey_label(self._hotkey),
         }
 
     def set_theme(self, theme: str) -> dict:
@@ -521,9 +599,16 @@ class Api:
         def on_quit(icon, item):
             self.close_app()
 
+        def on_autostart(icon, item):
+            set_autostart(not is_autostart_enabled())
+
         menu = pystray.Menu(
             pystray.MenuItem("Show Kothon", on_show, default=True),
-            pystray.MenuItem("Start / Stop  (Ctrl+Shift+V)", on_toggle),
+            pystray.MenuItem(f"Start / Stop  ({hotkey_label(self._hotkey)})", on_toggle),
+            pystray.MenuItem(
+                "Start with Windows", on_autostart,
+                checked=lambda item: is_autostart_enabled(),
+            ),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Quit", on_quit),
         )
@@ -534,7 +619,7 @@ class Api:
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def _fatal(message: str) -> None:
-    print(message, file=sys.stderr)
+    _LOG.error("%s", message)
     try:
         ctypes.windll.user32.MessageBoxW(None, message, "Kothon", 0x10)  # MB_ICONERROR
     except Exception:
@@ -543,8 +628,24 @@ def _fatal(message: str) -> None:
 
 
 def main() -> None:
+    applog.setup()
+    _LOG.info("Kothon v%s starting (frozen=%s)", __version__, _IS_FROZEN)
+
+    if not acquire_single_instance():
+        _LOG.warning("Another Kothon instance is already running — exiting.")
+        try:
+            ctypes.windll.user32.MessageBoxW(
+                None,
+                "Kothon is already running.\nLook for it in the system tray.",
+                "Kothon", 0x40,  # MB_ICONINFORMATION
+            )
+        except Exception:
+            pass
+        sys.exit(0)
+
     saved = _settings.load()
     default_language = saved.get("language", "Banglish")
+    hotkey = str(saved.get("hotkey", "ctrl+shift+v"))
     win_x = saved.get("window_x")
     win_y = saved.get("window_y")
 
@@ -558,7 +659,7 @@ def main() -> None:
         )
         return
     is_compact = bool(saved.get("compact", False))
-    api = Api(app, theme=saved.get("theme", "night"), compact=is_compact)
+    api = Api(app, theme=saved.get("theme", "night"), compact=is_compact, hotkey=hotkey)
 
     ui_path = _ASSETS_DIR / "ui" / "index.html"
     start_width, start_height = COMPACT_SIZE if is_compact else FULL_SIZE
@@ -590,14 +691,16 @@ def main() -> None:
 
     if _HAS_KEYBOARD:
         try:
-            _keyboard.add_hotkey(
-                "ctrl+shift+v",
-                lambda: api._js("toggleListen()"),
-                suppress=False,
-            )
-            print("Hotkey Ctrl+Shift+V registered.")
+            _keyboard.add_hotkey(hotkey, lambda: api._js("toggleListen()"), suppress=False)
+            _LOG.info("Hotkey %s registered.", hotkey_label(hotkey))
         except Exception as exc:
-            print(f"Hotkey registration failed: {exc}")
+            _LOG.error("Hotkey %r failed (%s) — falling back to Ctrl+Shift+V.", hotkey, exc)
+            try:
+                _keyboard.add_hotkey(
+                    "ctrl+shift+v", lambda: api._js("toggleListen()"), suppress=False
+                )
+            except Exception:
+                _LOG.exception("Fallback hotkey registration failed")
 
     webview.start()
 

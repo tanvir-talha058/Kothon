@@ -7,8 +7,18 @@ from typing import Any, Callable
 
 import sounddevice as sd
 
+try:
+    import numpy as _np
+except ImportError:      # numpy ships with the app, but stay runnable without it
+    _np = None
+
 
 def _rms(chunk: bytes) -> float:
+    if len(chunk) < 2 or len(chunk) % 2:
+        return 0.0
+    if _np is not None:
+        samples = _np.frombuffer(chunk, dtype=_np.int16)
+        return float(_np.sqrt(_np.mean(samples.astype(_np.float64) ** 2)) / 32768.0)
     arr = array.array("h")
     try:
         arr.frombytes(chunk)
