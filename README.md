@@ -41,8 +41,9 @@ No internet required — all processing happens on your machine.
 pip install -r requirements.txt
 ```
 
-Dependencies: `vosk`, `sounddevice`, `pywebview`, `keyboard`, `pystray`, `Pillow`.
-(`keyboard`, `pystray`, and `Pillow` are optional — without them you lose the global hotkey and tray icon, but the app still runs.)
+Dependencies: `vosk`, `sherpa-onnx`, `numpy`, `sounddevice`, `pywebview`, `keyboard`, `pystray`, `Pillow`.
+(`sherpa-onnx` powers Bangla recognition — without it, Bangla mode will not work.
+`keyboard`, `pystray`, and `Pillow` are optional — without them you lose the global hotkey and tray icon, but the app still runs.)
 
 ### Download a model
 
