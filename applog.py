@@ -33,14 +33,19 @@ def setup(level: int = logging.INFO) -> logging.Logger:
         pass                     # logging must never break the app
 
     # Windows consoles are often cp1252 — Bangla text must not crash logging
+    import sys
+
     try:
-        import sys
         sys.stdout.reconfigure(errors="replace")
         sys.stderr.reconfigure(errors="replace")
     except Exception:
         pass
 
-    console = logging.StreamHandler()
-    console.setFormatter(fmt)
-    logger.addHandler(console)
+    # The packaged app is windowed (kothon.spec: console=False), so
+    # sys.stderr is None there — adding a console handler would just be a
+    # silently-dead handler on every log call.
+    if sys.stderr is not None:
+        console = logging.StreamHandler()
+        console.setFormatter(fmt)
+        logger.addHandler(console)
     return logger
