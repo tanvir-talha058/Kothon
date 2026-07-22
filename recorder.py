@@ -75,6 +75,15 @@ class AudioRecorder:
             self._stream.start()
             self._is_recording = True
         except Exception as exc:
+            # The stream may have been constructed but failed to start; close it
+            # here or it stays open forever (stop() bails out on _is_recording).
+            if self._stream is not None:
+                try:
+                    self._stream.close()
+                except Exception:
+                    pass
+                self._stream = None
+            self._is_recording = False
             if self.on_error:
                 self.on_error(str(exc))
             raise
