@@ -151,6 +151,10 @@ class TestSettings(unittest.TestCase):
         self.assertEqual(self.settings.load(), {})
 
 
+_MODELS = Path(__file__).resolve().parent.parent / "models"
+
+
+@unittest.skipUnless(_MODELS.exists(), "models/ not present (CI)")
 class TestModelResolution(unittest.TestCase):
     def test_english_resolves(self):
         import main
@@ -172,6 +176,69 @@ class TestModelResolution(unittest.TestCase):
         self.assertTrue(main.resolve_model_path("Klingon").exists())
 
 
+class TestTransliteration(unittest.TestCase):
+    def test_common_words(self):
+        from banglish_fix import transliterate
+        self.assertEqual(transliterate("ami"), "আমি")
+        self.assertEqual(transliterate("tumi"), "তুমি")
+        self.assertEqual(transliterate("kore"), "করে")
+
+    def test_aggressive_mode_converts_unknown_words(self):
+        out = normalize_text("amar computer kharap", aggressive=True)
+        self.assertNotIn("computer", out)     # transliterated, not left roman
+
+    def test_default_mode_keeps_unknown_words_roman(self):
+        self.assertEqual(normalize_text("ami office jabo"), "আমি office যাবো")
+
+
+class TestBanglaPunctuation(unittest.TestCase):
+    def test_dari_command(self):
+        # \b fails after Bangla vowel signs — the whitespace-boundary patterns must match
+        self.assertEqual(normalize_text("আমি ভালো আছি দাঁড়ি"), "আমি ভালো আছি।")
+
+    def test_bangla_question_mark(self):
+        self.assertEqual(normalize_text("তুমি কেমন প্রশ্নবোধক"), "তুমি কেমন?")
+
+    def test_bangla_new_line(self):
+        self.assertEqual(normalize_text("এক নতুন লাইন দুই"), "এক\nদুই")
+
+
+class TestCustomizationOptions(unittest.TestCase):
+    def test_punctuation_commands_can_be_disabled(self):
+        out = normalize_text("ami jabo full stop", punctuation=False)
+        self.assertIn("full stop", out)
+        self.assertNotIn(".", out)
+
+    def test_phrases_still_apply_without_punctuation(self):
+        self.assertEqual(normalize_text("thik ache", punctuation=False), "ঠিক আছে")
+
+    def test_capitalization_can_be_disabled(self):
+        from main import DEFAULT_CONFIG, VoiceTyperApp
+        fake = type("A", (), {
+            "language": "English",
+            "config": {**DEFAULT_CONFIG, "auto_capitalize": False},
+        })()
+        self.assertEqual(VoiceTyperApp._cleanup_text(fake, "hello world"), "hello world")
+
+    def test_new_options_have_defaults(self):
+        from main import DEFAULT_CONFIG
+        for key in ("auto_stop", "trailing_space", "auto_capitalize",
+                    "punctuation_commands", "sounds", "always_on_top", "minimize_to"):
+            self.assertIn(key, DEFAULT_CONFIG)
+
+
+class TestConfig(unittest.TestCase):
+    def test_defaults_when_settings_empty(self):
+        from main import DEFAULT_CONFIG, config_from_settings
+        self.assertEqual(config_from_settings({}), DEFAULT_CONFIG)
+
+    def test_saved_values_override_defaults(self):
+        from main import config_from_settings
+        cfg = config_from_settings({"silence_seconds": 4.0, "unrelated": 1})
+        self.assertEqual(cfg["silence_seconds"], 4.0)
+        self.assertNotIn("unrelated", cfg)
+
+
 class TestUserDict(unittest.TestCase):
     def _write(self, tmp, payload):
         p = Path(tmp) / "custom_words.json"
@@ -180,6 +247,7 @@ class TestUserDict(unittest.TestCase):
 
     def test_loads_words_and_phrases(self):
         import json
+
         from banglish_fix import load_user_dict
         with tempfile.TemporaryDirectory() as tmp:
             p = self._write(tmp, json.dumps(
@@ -207,10 +275,14 @@ class TestWindowsIntegration(unittest.TestCase):
         self.assertEqual(hotkey_label("ctrl + alt + k"), "Ctrl+Alt+K")
 
     def test_single_instance_mutex(self):
-        # First acquire wins; acquiring the same named mutex again reports taken
+        # First acquire wins; acquiring the same named mutex again reports taken.
+        # Uses a test-only name so a running Kothon doesn't affect the result.
+        import os
+
         from main import acquire_single_instance
-        self.assertTrue(acquire_single_instance())
-        self.assertFalse(acquire_single_instance())
+        name = f"Kothon.Test.Mutex.{os.getpid()}"
+        self.assertTrue(acquire_single_instance(name))
+        self.assertFalse(acquire_single_instance(name))
 
     def test_autostart_command_quotes_paths(self):
         from main import _autostart_command
@@ -224,6 +296,7 @@ class TestTyperStructs(unittest.TestCase):
         # SendInput silently rejects every event if cbSize is wrong; the union
         # must include MOUSEINPUT (largest member) to reach 40 bytes on x64
         import ctypes
+
         from typer import INPUT
         expected = 40 if ctypes.sizeof(ctypes.c_void_p) == 8 else 28
         self.assertEqual(ctypes.sizeof(INPUT), expected)

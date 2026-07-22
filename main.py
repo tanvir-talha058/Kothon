@@ -2,6 +2,7 @@ import ctypes
 import ctypes.wintypes
 import json
 import logging
+import os
 import queue
 import re
 import sys
@@ -53,10 +54,34 @@ LANGUAGE_HINTS = {
     "Banglish": "Works with mixed Bangla-English speech and also normalizes common Banglish words.",
 }
 
-# Auto-stop: stop after this many consecutive silent chunks (each chunk ≈ 0.5 s)
-_SILENCE_RMS_THRESHOLD = 0.008
-_SILENCE_CHUNKS_TO_STOP = 5   # 2.5 s of silence
+# Auto-stop defaults (each audio chunk ≈ 0.5 s); user-tunable in Settings
+_CHUNK_SECONDS = 0.5
 _MIN_SPEECH_CHUNKS = 2         # need ≥ 1 s of speech before silence kicks in
+
+DEFAULT_CONFIG: dict[str, Any] = {
+    "silence_seconds": 2.5,        # pause length that auto-stops dictation
+    "vad_threshold": 0.008,        # RMS below this counts as silence
+    "auto_stop": True,             # stop by itself after silence
+    "mic_device": None,            # sounddevice index; None = system default
+    "typing_mode": "type",         # "type" (SendInput) | "paste" (clipboard+Ctrl+V)
+    "char_delay_ms": 0,            # pacing for apps that drop bursty input
+    "trailing_space": True,        # append a space after each typed segment
+    "auto_capitalize": True,       # capitalize English sentences
+    "punctuation_commands": True,  # spoken "comma"/"দাঁড়ি" become symbols
+    "aggressive_banglish": False,  # transliterate unknown roman words too
+    "push_to_talk": False,         # hold the hotkey to talk, release to stop
+    "sounds": False,               # start/stop chirps
+    "always_on_top": True,         # keep the window above other apps
+    "minimize_to": "mini",         # minimize button: "mini" bar | "tray"
+}
+
+
+def config_from_settings(saved: dict) -> dict[str, Any]:
+    cfg = dict(DEFAULT_CONFIG)
+    for key in cfg:
+        if key in saved:
+            cfg[key] = saved[key]
+    return cfg
 
 
 # ── Model helpers ─────────────────────────────────────────────────────────────
@@ -189,10 +214,15 @@ class ForegroundTracker:
 # ── Core app ──────────────────────────────────────────────────────────────────
 
 class VoiceTyperApp:
-    def __init__(self, model_path: Path, language: str) -> None:
+    def __init__(
+        self, model_path: Path, language: str, config: dict[str, Any] | None = None
+    ) -> None:
+        self.config = {**DEFAULT_CONFIG, **(config or {})}
         self.audio_queue: queue.Queue[bytes] = queue.Queue()
-        self.recorder = AudioRecorder(self.audio_queue)
-        self.typer = AutoTyper()
+        self.recorder = AudioRecorder(self.audio_queue, device=self.config["mic_device"])
+        self.typer = AutoTyper(char_delay=self.config["char_delay_ms"] / 1000.0)
+        # Last few typed segments, newest last — powers undo and history
+        self.history: list[str] = []
         self.is_listening = False
         self.worker_thread: threading.Thread | None = None
         # Serializes start/stop across UI, hotkey, tray, and auto-stop threads
@@ -220,6 +250,48 @@ class VoiceTyperApp:
             self.model_path = resolve_model_path(language)
             self.recognizer = get_recognizer(self.model_path)
             self._flush_queue()
+
+    def apply_config(self, updates: dict[str, Any]) -> None:
+        """Apply settings-panel changes; audio settings need a stopped mic."""
+        with self._state_lock:
+            self.config.update({k: v for k, v in updates.items() if k in DEFAULT_CONFIG})
+            self.recorder.device = self.config["mic_device"]
+            self.typer.char_delay = float(self.config["char_delay_ms"]) / 1000.0
+
+    # ── Normalization / typing helpers ────────────────────────────
+
+    def _normalize(self, text: str, is_partial: bool = False) -> str:
+        punctuation = bool(self.config["punctuation_commands"])
+        if self.language in {"Bangla", "Banglish"}:
+            return normalize_text(
+                text, is_partial=is_partial,
+                aggressive=bool(self.config["aggressive_banglish"]) and self.language == "Banglish",
+                punctuation=punctuation,
+            )
+        return apply_punctuation(text) if punctuation else text
+
+    def _emit(self, cleaned: str) -> None:
+        """Type a finished segment into the focused app and record it."""
+        _LOG.info("Typed (%s): %s", self.language, cleaned)
+        self._restore_focus()
+        out = cleaned + " " if self.config["trailing_space"] else cleaned
+        if self.config["typing_mode"] == "paste":
+            self.typer.paste_text(out)
+        else:
+            self.typer.type_text(out)
+        self.history.append(cleaned)
+        del self.history[:-8]
+
+    def undo_last(self) -> str:
+        """Erase the most recently typed segment with backspaces."""
+        if not self.history:
+            return ""
+        last = self.history.pop()
+        self._restore_focus()
+        extra = 1 if self.config["trailing_space"] else 0
+        self.typer.send_backspaces(len(last) + extra)
+        _LOG.info("Undid last segment (%d chars)", len(last))
+        return last
 
     def start_listening(self) -> None:
         with self._state_lock:
@@ -254,15 +326,9 @@ class VoiceTyperApp:
                 final_text = self.recognizer.finalize_text()
             except Exception:
                 final_text = ""
-            if self.language in {"Bangla", "Banglish"}:
-                final_text = normalize_text(final_text)
-            else:
-                final_text = apply_punctuation(final_text)
-            cleaned = self._cleanup_text(final_text)
+            cleaned = self._cleanup_text(self._normalize(final_text))
             if cleaned:
-                _LOG.info("Typed (%s): %s", self.language, cleaned)
-                self._restore_focus()
-                self.typer.type_text(cleaned + " ")
+                self._emit(cleaned)
             self._flush_queue()
             return cleaned
 
@@ -286,14 +352,17 @@ class VoiceTyperApp:
                 continue
 
             try:
-                # VAD — silence detection
+                # VAD — silence detection (thresholds are user-tunable)
+                silence_chunks_to_stop = max(
+                    1, round(float(self.config["silence_seconds"]) / _CHUNK_SECONDS)
+                )
                 level = _rms(chunk)
-                if level >= _SILENCE_RMS_THRESHOLD:
+                if level >= float(self.config["vad_threshold"]):
                     self._speech_chunks += 1
                     self._silence_chunks = 0
-                elif self._speech_chunks >= _MIN_SPEECH_CHUNKS:
+                elif self.config["auto_stop"] and self._speech_chunks >= _MIN_SPEECH_CHUNKS:
                     self._silence_chunks += 1
-                    if self._silence_chunks >= _SILENCE_CHUNKS_TO_STOP:
+                    if self._silence_chunks >= silence_chunks_to_stop:
                         if self.is_listening and self.on_auto_stop:
                             self.on_auto_stop()
                         break
@@ -301,23 +370,15 @@ class VoiceTyperApp:
                 # Speech recognition
                 text = self.recognizer.accept_audio(chunk)
                 if text:
-                    if self.language in {"Bangla", "Banglish"}:
-                        text = normalize_text(text)
-                    else:
-                        text = apply_punctuation(text)
-                    cleaned = self._cleanup_text(text)
+                    cleaned = self._cleanup_text(self._normalize(text))
                     if cleaned:
-                        _LOG.info("Typed (%s): %s", self.language, cleaned)
                         if self.on_typed:
                             self.on_typed(cleaned)
-                        self._restore_focus()
-                        self.typer.type_text(cleaned + " ")
+                        self._emit(cleaned)
                 else:
                     partial = self.recognizer.get_partial_text()
                     if partial and self.on_partial:
-                        if self.language in {"Bangla", "Banglish"}:
-                            partial = normalize_text(partial, is_partial=True)
-                        self.on_partial(partial)
+                        self.on_partial(self._normalize(partial, is_partial=True))
 
             except Exception as exc:
                 _LOG.exception("Audio loop error: %s", exc)
@@ -339,6 +400,8 @@ class VoiceTyperApp:
             return ""
         if self.language in {"Bangla", "Banglish"}:
             return cleaned
+        if not getattr(self, "config", DEFAULT_CONFIG)["auto_capitalize"]:
+            return cleaned
         if cleaned.lower() == "i":
             return "I"
         return cleaned[0].upper() + cleaned[1:] if len(cleaned) > 1 else cleaned.upper()
@@ -351,11 +414,11 @@ _ERROR_ALREADY_EXISTS = 183
 _mutex_handle = None   # held for the process lifetime
 
 
-def acquire_single_instance() -> bool:
+def acquire_single_instance(name: str = _MUTEX_NAME) -> bool:
     """Return False if another Kothon instance already holds the mutex."""
     global _mutex_handle
     kernel32 = ctypes.windll.kernel32
-    _mutex_handle = kernel32.CreateMutexW(None, False, _MUTEX_NAME)
+    _mutex_handle = kernel32.CreateMutexW(None, False, name)
     return kernel32.GetLastError() != _ERROR_ALREADY_EXISTS
 
 
@@ -432,9 +495,12 @@ class Api:
         self._theme = theme if theme in {"day", "night"} else "night"
         self._compact = bool(compact)
         self._hotkey = hotkey
+        self._onboarded = False
         self._window: webview.Window | None = None
         self._tray: Any = None
         self._last_level_t: float = 0.0
+        self._hk_handle: Any = None
+        self._release_hook: Any = None
 
     def set_window(self, window: webview.Window) -> None:
         self._window = window
@@ -458,7 +524,130 @@ class Api:
             "compact": self._compact,
             "version": __version__,
             "hotkey": hotkey_label(self._hotkey),
+            "onboarded": self._onboarded,
+            "sounds": self._app.config["sounds"],
+            "minimize_to": self._app.config["minimize_to"],
         }
+
+    def set_onboarded(self) -> dict:
+        self._onboarded = True
+        _settings.save({"onboarded": True})
+        return {"success": True}
+
+    # ── Settings panel ────────────────────────────────────────────
+
+    def get_settings(self) -> dict:
+        cfg = self._app.config
+        return {
+            "devices": AudioRecorder.list_input_devices(),
+            "hotkey": self._hotkey,
+            **{k: cfg[k] for k in DEFAULT_CONFIG},
+        }
+
+    def apply_settings(self, cfg: dict) -> dict:
+        try:
+            if self._app.is_listening:
+                return {"success": False, "error": "Stop dictation before changing settings."}
+            new_hotkey = str(cfg.get("hotkey", self._hotkey)).strip().lower() or self._hotkey
+            updates = {
+                "mic_device": cfg.get("mic_device"),
+                "silence_seconds": max(1.0, min(6.0, float(cfg.get("silence_seconds", 2.5)))),
+                "vad_threshold": max(0.002, min(0.03, float(cfg.get("vad_threshold", 0.008)))),
+                "auto_stop": bool(cfg.get("auto_stop", True)),
+                "typing_mode": "paste" if cfg.get("typing_mode") == "paste" else "type",
+                "char_delay_ms": max(0, min(30, int(cfg.get("char_delay_ms", 0)))),
+                "trailing_space": bool(cfg.get("trailing_space", True)),
+                "auto_capitalize": bool(cfg.get("auto_capitalize", True)),
+                "punctuation_commands": bool(cfg.get("punctuation_commands", True)),
+                "aggressive_banglish": bool(cfg.get("aggressive_banglish")),
+                "push_to_talk": bool(cfg.get("push_to_talk")),
+                "sounds": bool(cfg.get("sounds")),
+                "always_on_top": bool(cfg.get("always_on_top", True)),
+                "minimize_to": "tray" if cfg.get("minimize_to") == "tray" else "mini",
+            }
+            if updates["mic_device"] is not None:
+                updates["mic_device"] = int(updates["mic_device"])
+            # Rebinding validates the hotkey; failure keeps the old binding
+            if not self.register_hotkey(new_hotkey, updates["push_to_talk"]):
+                return {"success": False, "error": f'Hotkey "{new_hotkey}" could not be registered.'}
+            self._hotkey = new_hotkey
+            self._app.apply_config(updates)
+            if self._window is not None:
+                try:
+                    self._window.on_top = updates["always_on_top"]
+                except Exception:
+                    pass   # older pywebview backends have no runtime setter
+            _settings.save({**updates, "hotkey": new_hotkey})
+            return {"success": True, "hotkey": hotkey_label(new_hotkey)}
+        except Exception as exc:
+            _LOG.exception("apply_settings failed")
+            return {"success": False, "error": str(exc)}
+
+    def open_config_folder(self) -> dict:
+        try:
+            folder = Path.home() / ".kothon"
+            folder.mkdir(parents=True, exist_ok=True)
+            os.startfile(str(folder))  # noqa: S606 — local folder, user-initiated
+            return {"success": True}
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+
+    # ── Undo / history ────────────────────────────────────────────
+
+    def undo_last(self) -> dict:
+        try:
+            if self._app.is_listening:
+                return {"success": False, "error": "Stop dictation before undoing."}
+            text = self._app.undo_last()
+            if not text:
+                return {"success": False, "error": "Nothing to undo."}
+            return {"success": True, "text": text}
+        except Exception as exc:
+            return {"success": False, "error": str(exc)}
+
+    def get_history(self) -> list:
+        return list(reversed(self._app.history))
+
+    # ── Hotkey binding (toggle or push-to-talk) ──────────────────
+
+    def register_hotkey(self, hotkey: str, push_to_talk: bool) -> bool:
+        if not _HAS_KEYBOARD:
+            return True   # nothing to bind against; settings still apply
+        try:
+            old_handle, old_hook = self._hk_handle, self._release_hook
+            if push_to_talk:
+                handle = _keyboard.add_hotkey(
+                    hotkey, lambda: self._js("pttStart()"), suppress=False
+                )
+                release_key = hotkey.split("+")[-1].strip()
+                hook = _keyboard.on_release_key(
+                    release_key, lambda e: self._js("pttStop()")
+                )
+            else:
+                handle = _keyboard.add_hotkey(
+                    hotkey, lambda: self._js("toggleListen()"), suppress=False
+                )
+                hook = None
+            # New binding succeeded — now drop the old one
+            if old_handle is not None:
+                try:
+                    _keyboard.remove_hotkey(old_handle)
+                except Exception:
+                    pass
+            if old_hook is not None:
+                try:
+                    _keyboard.unhook(old_hook)
+                except Exception:
+                    pass
+            self._hk_handle, self._release_hook = handle, hook
+            _LOG.info(
+                "Hotkey %s registered (%s mode).",
+                hotkey_label(hotkey), "push-to-talk" if push_to_talk else "toggle",
+            )
+            return True
+        except Exception as exc:
+            _LOG.error("Hotkey %r failed: %s", hotkey, exc)
+            return False
 
     def set_theme(self, theme: str) -> dict:
         if theme not in {"day", "night"}:
@@ -651,15 +840,21 @@ def main() -> None:
 
     try:
         model_path = resolve_model_path(default_language)
-        app = VoiceTyperApp(model_path=model_path, language=default_language)
+        app = VoiceTyperApp(
+            model_path=model_path,
+            language=default_language,
+            config=config_from_settings(saved),
+        )
     except FileNotFoundError as exc:
         _fatal(
             f"{exc}\n\nExpected location: {MODELS_DIR}\n"
-            "Download a Vosk/sherpa model and place its folder there, then start Kothon again."
+            "Run  python download_model.py bn  (or en) to fetch one, "
+            "then start Kothon again."
         )
         return
     is_compact = bool(saved.get("compact", False))
     api = Api(app, theme=saved.get("theme", "night"), compact=is_compact, hotkey=hotkey)
+    api._onboarded = bool(saved.get("onboarded", False))
 
     ui_path = _ASSETS_DIR / "ui" / "index.html"
     start_width, start_height = COMPACT_SIZE if is_compact else FULL_SIZE
@@ -672,8 +867,8 @@ def main() -> None:
         height=start_height,
         resizable=False,
         frameless=True,
-        on_top=True,
-        background_color="#0a0a0f",
+        on_top=bool(app.config["always_on_top"]),
+        background_color="#0b100d",   # matches the UI's --bg: no flash on launch
         easy_drag=False,
     )
     if win_x is not None:
@@ -689,18 +884,10 @@ def main() -> None:
     focus_tracker.start()
     app.focus_tracker = focus_tracker
 
-    if _HAS_KEYBOARD:
-        try:
-            _keyboard.add_hotkey(hotkey, lambda: api._js("toggleListen()"), suppress=False)
-            _LOG.info("Hotkey %s registered.", hotkey_label(hotkey))
-        except Exception as exc:
-            _LOG.error("Hotkey %r failed (%s) — falling back to Ctrl+Shift+V.", hotkey, exc)
-            try:
-                _keyboard.add_hotkey(
-                    "ctrl+shift+v", lambda: api._js("toggleListen()"), suppress=False
-                )
-            except Exception:
-                _LOG.exception("Fallback hotkey registration failed")
+    if not api.register_hotkey(hotkey, bool(app.config["push_to_talk"])):
+        _LOG.warning("Falling back to Ctrl+Shift+V.")
+        api._hotkey = "ctrl+shift+v"
+        api.register_hotkey("ctrl+shift+v", bool(app.config["push_to_talk"]))
 
     webview.start()
 

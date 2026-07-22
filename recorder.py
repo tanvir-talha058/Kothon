@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import array
 import math
+from collections.abc import Callable
 from queue import Queue
-from typing import Any, Callable
+from typing import Any
 
 import sounddevice as sd
 
@@ -38,12 +39,14 @@ class AudioRecorder:
         channels: int = 1,
         dtype: str = "int16",
         blocksize: int = 8000,
+        device: int | None = None,
     ) -> None:
         self.audio_queue = audio_queue
         self.samplerate = samplerate
         self.channels = channels
         self.dtype = dtype
         self.blocksize = blocksize
+        self.device = device          # None = system default input
         self._stream: sd.RawInputStream | None = None
         self._is_recording = False
         self.on_level: Callable[[float], None] | None = None
@@ -66,6 +69,7 @@ class AudioRecorder:
                 blocksize=self.blocksize,
                 dtype=self.dtype,
                 channels=self.channels,
+                device=self.device,
                 callback=self._audio_callback,
             )
             self._stream.start()
@@ -74,6 +78,23 @@ class AudioRecorder:
             if self.on_error:
                 self.on_error(str(exc))
             raise
+
+    @staticmethod
+    def list_input_devices() -> list[dict]:
+        """Input devices for the settings picker: [{"id", "name", "default"}]."""
+        devices = []
+        try:
+            default_in = sd.default.device[0]
+            for idx, info in enumerate(sd.query_devices()):
+                if info.get("max_input_channels", 0) > 0:
+                    devices.append({
+                        "id": idx,
+                        "name": info.get("name", f"Device {idx}"),
+                        "default": idx == default_in,
+                    })
+        except Exception:
+            pass
+        return devices
 
     def stop(self) -> None:
         if not self._is_recording:

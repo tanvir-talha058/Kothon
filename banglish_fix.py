@@ -44,6 +44,17 @@ _PHRASE_REPLACEMENTS: dict[str, str] = {
 
 # ── Spoken punctuation → symbol ───────────────────────────────────────────────
 _PUNCTUATION_COMMANDS: dict[str, str] = {
+    # Bangla commands (spoken in Bangla mode; longer phrases first)
+    "প্রশ্নবোধক চিহ্ন": "?",
+    "প্রশ্নবোধক": "?",
+    "বিস্ময়বোধক চিহ্ন": "!",
+    "বিস্ময়বোধক": "!",
+    "নতুন লাইন": "\n",
+    "নতুন প্যারা": "\n\n",
+    "দাঁড়ি": "।",
+    "দাড়ি": "।",
+    "কমা": ",",
+    # English commands
     "full stop": ".",
     "period": ".",
     "comma": ",",
@@ -320,22 +331,90 @@ def load_user_dict(path: Path = USER_DICT_PATH) -> tuple[dict[str, str], dict[st
 _USER_WORDS, _USER_PHRASES = load_user_dict()
 _WORD_REPLACEMENTS.update(_USER_WORDS)   # user entries override built-ins
 
-# Patterns compiled once at import — normalize_text runs per utterance
+# Patterns compiled once at import — normalize_text runs per utterance.
+# Whitespace-boundary lookarounds instead of \b: Bangla vowel signs are
+# combining marks, which Python's \b treats as non-word — "দাঁড়ি\b" never
+# matches. Spoken commands are always whitespace-delimited anyway.
+def _cmd_pattern(source: str) -> re.Pattern:
+    return re.compile(rf"(?<!\S){re.escape(source)}(?!\S)", flags=re.IGNORECASE)
+
+
 _PUNCTUATION_PATTERNS = [
-    (re.compile(rf"\b{re.escape(cmd)}\b", flags=re.IGNORECASE), symbol)
-    for cmd, symbol in _PUNCTUATION_COMMANDS.items()
+    (_cmd_pattern(cmd), symbol) for cmd, symbol in _PUNCTUATION_COMMANDS.items()
 ]
 # User phrases run first (and replace same-key built-ins), so they always win
 _all_phrases = {**_PHRASE_REPLACEMENTS, **_USER_PHRASES}
 _ordered_phrases = list(_USER_PHRASES) + [k for k in _all_phrases if k not in _USER_PHRASES]
 _PHRASE_PATTERNS = [
-    (re.compile(rf"\b{re.escape(source)}\b", flags=re.IGNORECASE), _all_phrases[source])
-    for source in _ordered_phrases
+    (_cmd_pattern(source), _all_phrases[source]) for source in _ordered_phrases
 ]
 
 
 def _normalize_whitespace(text: str) -> str:
     return " ".join(text.split())
+
+
+# ── Phonetic transliteration (Avro-style subset) ─────────────────────────────
+# Best-effort roman→Bangla for words the dictionary doesn't know. Used only
+# in "aggressive Banglish" mode — the dictionary always wins when it has an
+# entry, and plain English words are left roman unless the user opts in.
+
+_TRANSLIT_CONSONANTS: list[tuple[str, str]] = [   # longest match first
+    ("kkh", "ক্ষ"), ("ksh", "ক্ষ"), ("chh", "ছ"),
+    ("kh", "খ"), ("gh", "ঘ"), ("ch", "চ"), ("jh", "ঝ"),
+    ("th", "থ"), ("dh", "ধ"), ("ph", "ফ"), ("bh", "ভ"),
+    ("sh", "শ"), ("ng", "ঙ"),
+    ("k", "ক"), ("g", "গ"), ("c", "ক"), ("j", "জ"),
+    ("t", "ত"), ("d", "দ"), ("n", "ন"), ("p", "প"),
+    ("f", "ফ"), ("b", "ব"), ("v", "ভ"), ("m", "ম"),
+    ("r", "র"), ("l", "ল"), ("s", "স"), ("h", "হ"),
+    ("z", "য"), ("y", "য়"), ("w", "ও"), ("x", "ক্স"), ("q", "ক"),
+]
+# After a consonant: vowel sign (matra). "o" is the inherent vowel — no sign.
+_VOWEL_SIGNS: dict[str, str] = {
+    "aa": "া", "ii": "ী", "ee": "ী", "uu": "ূ", "oo": "ু",
+    "oi": "ৈ", "ou": "ৌ", "au": "ৌ",
+    "a": "া", "i": "ি", "u": "ু", "e": "ে", "o": "",
+}
+# Word-initial / after another vowel: independent vowel letter.
+_VOWEL_INDEPENDENT: dict[str, str] = {
+    "aa": "আ", "ii": "ঈ", "ee": "ঈ", "uu": "ঊ", "oo": "উ",
+    "oi": "ঐ", "ou": "ঔ", "au": "ঔ",
+    "a": "আ", "i": "ই", "u": "উ", "e": "এ", "o": "অ",
+}
+
+
+def transliterate(word: str) -> str:
+    """Roman → Bangla, greedy longest-match. Best effort, not a full Avro."""
+    w = word.lower()
+    out: list[str] = []
+    i = 0
+    after_consonant = False
+    while i < len(w):
+        matched = False
+        for length in (2, 1):
+            seg = w[i:i + length]
+            if len(seg) == length and seg in _VOWEL_SIGNS:
+                table = _VOWEL_SIGNS if after_consonant else _VOWEL_INDEPENDENT
+                out.append(table[seg])
+                after_consonant = False
+                i += length
+                matched = True
+                break
+        if matched:
+            continue
+        for src, tgt in _TRANSLIT_CONSONANTS:
+            if w.startswith(src, i):
+                out.append(tgt)
+                after_consonant = True
+                i += len(src)
+                matched = True
+                break
+        if not matched:
+            out.append(w[i])
+            after_consonant = False
+            i += 1
+    return "".join(out)
 
 
 def apply_punctuation(text: str) -> str:
@@ -348,7 +427,7 @@ def apply_punctuation(text: str) -> str:
     for pattern, symbol in _PUNCTUATION_PATTERNS:
         normalized = pattern.sub(symbol, normalized)
     # Attach punctuation to the preceding word and hug parentheses
-    normalized = re.sub(r"[ \t]+([.,!?;:])", r"\1", normalized)
+    normalized = re.sub(r"[ \t]+([.,!?;:।])", r"\1", normalized)
     normalized = re.sub(r"\([ \t]+", "(", normalized)
     normalized = re.sub(r"[ \t]+\)", ")", normalized)
     normalized = re.sub(r"[ \t]*\n[ \t]*", "\n", normalized)
@@ -358,15 +437,21 @@ def apply_punctuation(text: str) -> str:
     return normalized.strip()
 
 
-def normalize_text(text: str, is_partial: bool = False) -> str:
+def normalize_text(
+    text: str,
+    is_partial: bool = False,
+    aggressive: bool = False,
+    punctuation: bool = True,
+) -> str:
     normalized = _normalize_whitespace(text)
     if not normalized:
         return ""
 
-    if not is_partial:
+    if not is_partial and punctuation:
         # Punctuation commands — only on complete segments
         normalized = apply_punctuation(normalized)
 
+    if not is_partial:
         # Multi-word phrase replacements — only on complete segments
         for pattern, target in _PHRASE_PATTERNS:
             normalized = pattern.sub(target, normalized)
@@ -379,6 +464,8 @@ def normalize_text(text: str, is_partial: bool = False) -> str:
             result.append(token)
             continue
         replacement = _WORD_REPLACEMENTS.get(token.lower())
+        if replacement is None and aggressive:
+            replacement = transliterate(token)
         result.append(replacement if replacement is not None else token)
 
     return "".join(result).strip()
