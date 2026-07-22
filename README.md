@@ -17,6 +17,11 @@ No internet required — all processing happens on your machine.
 - Copy button to grab the whole transcript
 - **Mini bar**: the minimize button collapses Kothon to a small always-on-top dock (waveform + mic + timer) so you can dictate anywhere without the full window
 - **Custom dictionary**: add your own Banglish→Bangla words and phrases in `~/.kothon/custom_words.json` — user entries override the built-ins
+- **Settings panel** (gear icon): microphone picker, auto-stop delay, silence threshold, hotkey, push-to-talk, typing mode, and recent takes
+- **Undo**: erase the last typed segment with one click
+- **Push-to-talk**: optionally hold the hotkey to talk, release to stop
+- Bangla spoken punctuation: "দাঁড়ি", "কমা", "প্রশ্নবোধক", "নতুন লাইন"
+- Optional aggressive Banglish mode: transliterates words the dictionary doesn't know (Avro-style)
 - Day/night theme, custom hotkey, optional start-with-Windows (tray menu)
 - Single-instance guard — launching Kothon twice just points you at the running copy
 - Remembers language, theme, hotkey, and window position (`~/.kothon/settings.json`); activity log at `~/.kothon/kothon.log`
@@ -37,9 +42,14 @@ pip install -r requirements.txt
 Dependencies: `vosk`, `sounddevice`, `pywebview`, `keyboard`, `pystray`, `Pillow`.
 (`keyboard`, `pystray`, and `Pillow` are optional — without them you lose the global hotkey and tray icon, but the app still runs.)
 
-### Download a Vosk model
+### Download a model
 
-Get a model from https://alphacephei.com/vosk/models and extract it into `models/`, e.g.:
+```bash
+python download_model.py bn   # Bangla (~94 MB)
+python download_model.py en   # English (~40 MB)
+```
+
+Or manually: get a model from https://alphacephei.com/vosk/models and extract it into `models/`, e.g.:
 
 ```text
 Kothon/

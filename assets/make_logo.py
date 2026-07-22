@@ -36,7 +36,7 @@ def _draw_mark(draw: ImageDraw.ImageDraw, scale: float) -> None:
     def s(v: float) -> float:
         return v * scale
 
-    for x, h, rise in zip(BAR_X, BAR_H, BAR_RISE):
+    for x, h, rise in zip(BAR_X, BAR_H, BAR_RISE, strict=True):
         draw.rounded_rectangle(
             [s(x), s(BAR_TOP - rise), s(x + BAR_W), s(BAR_TOP + h)],
             radius=s(BAR_W / 2), fill=JADE,
@@ -62,7 +62,7 @@ def make_tile(size: int) -> Image.Image:
 def make_svg() -> str:
     bars = "\n".join(
         f'  <rect x="{x}" y="{BAR_TOP - rise}" width="{BAR_W}" height="{h + rise}" rx="{BAR_W // 2}"/>'
-        for x, h, rise in zip(BAR_X, BAR_H, BAR_RISE)
+        for x, h, rise in zip(BAR_X, BAR_H, BAR_RISE, strict=True)
     )
     matra_h = MATRA[3] - MATRA[1]
     return f"""<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
