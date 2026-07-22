@@ -1,5 +1,7 @@
 # Kothon — Offline Voice Typer
 
+[![CI](https://github.com/tanvir-talha058/Kothon/actions/workflows/ci.yml/badge.svg)](https://github.com/tanvir-talha058/Kothon/actions/workflows/ci.yml)
+
 An offline voice-typing app for Windows. Speak in **Bangla, English, or Banglish**; Kothon converts your speech to text locally with [Vosk](https://alphacephei.com/vosk/), applies Banglish→Bangla normalization, and types the result into whatever application is focused.
 
 No internet required — all processing happens on your machine.
