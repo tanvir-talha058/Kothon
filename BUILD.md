@@ -35,6 +35,11 @@ Notes:
   a missing-module error, that module may need removing from `excludes`.
 - Version lives in three places — keep them in sync:
   `main.py` (`__version__`), `version_info.txt`, `kothon.iss` (`AppVersion`).
+- Optional cloud features use `keyring` to reach the Windows Credential Manager.
+  `kothon.spec` names its backend (`keyring.backends.Windows` and friends) in
+  `hiddenimports` because keyring resolves the backend at runtime via entry
+  points that PyInstaller can't see. If saving an API key fails in the frozen
+  exe with a "no recommended backend" error, that hidden import is missing.
 
 ## 3. Build the installer
 

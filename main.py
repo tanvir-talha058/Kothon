@@ -14,10 +14,12 @@ from typing import Any
 import webview
 
 import applog
+import providers
+import secrets_store
 import settings as _settings
 from banglish_fix import apply_punctuation, normalize_text
 from recorder import AudioRecorder, _rms
-from stt import create_recognizer
+from stt import CloudRecognizer, create_recognizer
 from typer import AutoTyper
 
 try:
@@ -73,6 +75,14 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "sounds": False,               # start/stop chirps
     "always_on_top": True,         # keep the window above other apps
     "minimize_to": "mini",         # minimize button: "mini" bar | "tray"
+    # ── Optional cloud features (opt-in; off by default) ──────────────────
+    "online_enabled": False,       # master switch — requires user consent
+    "stt_provider": "offline",     # "offline" | "openai" | "gemini"
+    "stt_model": "",               # blank → provider default
+    "rewrite_enabled": False,      # LLM cleanup of the transcript before typing
+    "rewrite_provider": "openai",  # "openai" | "gemini" | "openrouter" | "anthropic"
+    "rewrite_model": "",           # blank → provider default
+    "rewrite_prompt": "",          # blank → providers.DEFAULT_REWRITE_PROMPT
 }
 
 
@@ -229,7 +239,7 @@ class VoiceTyperApp:
         self._state_lock = threading.Lock()
         self.language = language
         self.model_path = model_path
-        self.recognizer = get_recognizer(model_path)
+        self.recognizer = self._select_recognizer()
         # Restores focus to the field the user was dictating into before typing
         self.focus_tracker: ForegroundTracker | None = None
         # Callbacks wired by Api
@@ -242,13 +252,30 @@ class VoiceTyperApp:
         self._speech_chunks = 0
         self._silence_chunks = 0
 
+    def _select_recognizer(self) -> Any:
+        """Pick the STT engine from config: a cloud recognizer when online + a
+        provider is chosen and a key is present, otherwise the offline engine."""
+        if self.config.get("online_enabled") and self.config.get("stt_provider", "offline") != "offline":
+            provider = self.config["stt_provider"]
+            key = secrets_store.get_key(provider)
+            if key:
+                model = providers.stt_model_for(provider, self.config.get("stt_model", ""))
+                return CloudRecognizer(provider, model, key, on_error=self._forward_error)
+            _LOG.warning("Cloud STT selected (%s) but no API key set; using offline model", provider)
+        return get_recognizer(self.model_path)
+
+    def _forward_error(self, message: str) -> None:
+        _LOG.error("%s", message)
+        if self.on_error:
+            self.on_error(message)
+
     def set_language(self, language: str) -> None:
         with self._state_lock:
             if self.is_listening:
                 raise RuntimeError("Stop listening before switching language.")
             self.language = language
             self.model_path = resolve_model_path(language)
-            self.recognizer = get_recognizer(self.model_path)
+            self.recognizer = self._select_recognizer()
             self._flush_queue()
 
     def apply_config(self, updates: dict[str, Any]) -> None:
@@ -257,6 +284,8 @@ class VoiceTyperApp:
             self.config.update({k: v for k, v in updates.items() if k in DEFAULT_CONFIG})
             self.recorder.device = self.config["mic_device"]
             self.typer.char_delay = float(self.config["char_delay_ms"]) / 1000.0
+            # STT provider/model/online toggle may have changed — rebuild the engine
+            self.recognizer = self._select_recognizer()
 
     # ── Normalization / typing helpers ────────────────────────────
 
@@ -269,6 +298,31 @@ class VoiceTyperApp:
                 punctuation=punctuation,
             )
         return apply_punctuation(text) if punctuation else text
+
+    def _rewrite(self, text: str) -> str:
+        """Optionally clean up a finished segment with a cloud LLM.
+
+        Off unless online + rewrite are enabled and a key is present. Any
+        failure logs and returns the original text — the user never loses words.
+        Runs on the audio worker thread, so network latency never blocks the UI.
+        """
+        if not text or not text.strip():
+            return text
+        if not (self.config.get("online_enabled") and self.config.get("rewrite_enabled")):
+            return text
+        provider = self.config.get("rewrite_provider", "openai")
+        key = secrets_store.get_key(provider)
+        if not key:
+            return text
+        try:
+            result = providers.rewrite(
+                provider, key, self.config.get("rewrite_model", ""),
+                self.config.get("rewrite_prompt", ""), text, self.language,
+            )
+            return result or text
+        except Exception as exc:
+            _LOG.warning("Rewrite failed (%s); using original text: %s", provider, exc)
+            return text
 
     def _emit(self, cleaned: str) -> None:
         """Type a finished segment into the focused app and record it."""
@@ -326,8 +380,10 @@ class VoiceTyperApp:
                 final_text = self.recognizer.finalize_text()
             except Exception:
                 final_text = ""
-            cleaned = self._cleanup_text(self._normalize(final_text))
+            cleaned = self._rewrite(self._cleanup_text(self._normalize(final_text)))
             if cleaned:
+                if self.on_typed:
+                    self.on_typed(cleaned)
                 self._emit(cleaned)
             self._flush_queue()
             return cleaned
@@ -370,7 +426,7 @@ class VoiceTyperApp:
                 # Speech recognition
                 text = self.recognizer.accept_audio(chunk)
                 if text:
-                    cleaned = self._cleanup_text(self._normalize(text))
+                    cleaned = self._rewrite(self._cleanup_text(self._normalize(text)))
                     if cleaned:
                         if self.on_typed:
                             self.on_typed(cleaned)
@@ -527,6 +583,11 @@ class Api:
             "onboarded": self._onboarded,
             "sounds": self._app.config["sounds"],
             "minimize_to": self._app.config["minimize_to"],
+            "online_active": bool(
+                self._app.config["online_enabled"]
+                and (self._app.config["rewrite_enabled"]
+                     or self._app.config["stt_provider"] != "offline")
+            ),
         }
 
     def set_onboarded(self) -> dict:
@@ -542,13 +603,67 @@ class Api:
             "devices": AudioRecorder.list_input_devices(),
             "hotkey": self._hotkey,
             **{k: cfg[k] for k in DEFAULT_CONFIG},
+            **self.get_ai_settings(),
         }
+
+    def get_ai_settings(self) -> dict:
+        """Provider metadata + which keys are stored (booleans only, never the
+        keys themselves) + default prompt. Safe to send to the UI."""
+        return {
+            "providers": [
+                {
+                    "id": meta["id"],
+                    "label": meta["label"],
+                    "supports_rewrite": meta["supports_rewrite"],
+                    "supports_stt": meta["supports_stt"],
+                    "default_rewrite_model": meta["default_rewrite_model"],
+                    "default_stt_model": meta["default_stt_model"],
+                    "key_set": secrets_store.has_key(meta["id"]),
+                }
+                for meta in providers.PROVIDERS.values()
+            ],
+            "default_rewrite_prompt": providers.DEFAULT_REWRITE_PROMPT,
+        }
+
+    def set_api_key(self, provider: str, key: str) -> dict:
+        if provider not in providers.PROVIDERS:
+            return {"success": False, "error": "Unknown provider."}
+        if secrets_store.set_key(provider, key):
+            return {"success": True, "key_set": secrets_store.has_key(provider)}
+        return {"success": False, "error": "Could not store the key (Credential Manager unavailable?)."}
+
+    def clear_api_key(self, provider: str) -> dict:
+        if provider not in providers.PROVIDERS:
+            return {"success": False, "error": "Unknown provider."}
+        secrets_store.delete_key(provider)
+        return {"success": True, "key_set": secrets_store.has_key(provider)}
+
+    def test_provider(self, provider: str, model: str = "") -> dict:
+        if provider not in providers.PROVIDERS:
+            return {"success": False, "error": "Unknown provider."}
+        key = secrets_store.get_key(provider)
+        if not key:
+            return {"success": False, "error": "Save an API key first."}
+        ok, message = providers.test_connection(provider, key, model)
+        return {"success": ok, "message" if ok else "error": message}
+
+    def set_online_enabled(self, enabled: bool) -> dict:
+        """Record the consent toggle (the consent dialog lives in the UI)."""
+        self._app.apply_config({"online_enabled": bool(enabled)})
+        _settings.save({"online_enabled": bool(enabled)})
+        return {"success": True, "online_enabled": bool(enabled)}
 
     def apply_settings(self, cfg: dict) -> dict:
         try:
             if self._app.is_listening:
                 return {"success": False, "error": "Stop dictation before changing settings."}
             new_hotkey = str(cfg.get("hotkey", self._hotkey)).strip().lower() or self._hotkey
+            stt_provider = cfg.get("stt_provider", "offline")
+            if stt_provider not in ("offline", *providers.stt_providers()):
+                stt_provider = "offline"
+            rewrite_provider = cfg.get("rewrite_provider", "openai")
+            if rewrite_provider not in providers.rewrite_providers():
+                rewrite_provider = "openai"
             updates = {
                 "mic_device": cfg.get("mic_device"),
                 "silence_seconds": max(1.0, min(6.0, float(cfg.get("silence_seconds", 2.5)))),
@@ -564,6 +679,13 @@ class Api:
                 "sounds": bool(cfg.get("sounds")),
                 "always_on_top": bool(cfg.get("always_on_top", True)),
                 "minimize_to": "tray" if cfg.get("minimize_to") == "tray" else "mini",
+                "online_enabled": bool(cfg.get("online_enabled")),
+                "stt_provider": stt_provider,
+                "stt_model": str(cfg.get("stt_model", "")).strip(),
+                "rewrite_enabled": bool(cfg.get("rewrite_enabled")),
+                "rewrite_provider": rewrite_provider,
+                "rewrite_model": str(cfg.get("rewrite_model", "")).strip(),
+                "rewrite_prompt": str(cfg.get("rewrite_prompt", "")).strip(),
             }
             if updates["mic_device"] is not None:
                 updates["mic_device"] = int(updates["mic_device"])

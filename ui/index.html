@@ -437,6 +437,29 @@ input[type="range"] { width: 100%; accent-color: var(--jade); }
 }
 .history-empty { font-size: 12px; color: var(--faint); }
 
+/* AI & Cloud (online) */
+.online-badge {
+  font-family: 'Cascadia Mono', Consolas, monospace;
+  font-size: 8.5px; letter-spacing: 0.14em; text-transform: uppercase;
+  color: var(--amber); border: 1px solid var(--amber); border-radius: 5px;
+  padding: 1px 5px; margin-left: 7px; vertical-align: middle;
+}
+.set-note { font-size: 11px; color: var(--faint); line-height: 1.5; margin: -2px 0 2px; }
+.provider-row {
+  display: flex; align-items: center; gap: 6px; flex-wrap: wrap;
+  padding: 8px 9px; border-radius: 8px; background: var(--raise);
+  border: 1px solid var(--border);
+}
+.provider-row .prov-name { flex: 1 0 100%; font-size: 12px; font-weight: 600; color: var(--text); }
+.provider-row .prov-name .cap { font-weight: 400; color: var(--faint); font-size: 10.5px; }
+.provider-row .prov-key { flex: 1 1 130px; min-width: 0; }
+.provider-row .prov-state { font-size: 10.5px; color: var(--jade); flex: 1 0 100%; min-height: 13px; }
+.provider-row .prov-state.warn { color: var(--amber); }
+.btn.tiny { padding: 5px 9px; font-size: 11px; border-radius: 6px; }
+textarea.input { resize: vertical; min-height: 58px; font-family: inherit; line-height: 1.5; }
+.ai-sub { padding-left: 2px; }
+.ai-fields.disabled { opacity: 0.45; pointer-events: none; }
+
 /* Onboarding */
 .onboard-body {
   flex: 1; display: flex; flex-direction: column; justify-content: center;
@@ -474,7 +497,8 @@ input[type="range"] { width: 100%; accent-color: var(--jade); }
         <rect x="52"  y="88" width="152" height="22" rx="11"/>
       </svg>
       <span class="bn">কথন</span>
-      <span class="latin">Kothon · offline</span>
+      <span class="latin" id="modeLabel">Kothon · offline</span>
+      <span class="online-badge" id="onlineBadge" hidden>online</span>
     </div>
     <div class="win-controls">
       <button class="win-btn" onclick="openSettings()" title="Settings">
@@ -649,6 +673,42 @@ input[type="range"] { width: 100%; accent-color: var(--jade); }
       </select>
     </label>
 
+    <div class="set-section">AI &amp; Cloud (online)</div>
+    <label class="toggle">
+      <input type="checkbox" id="setOnline" onchange="onOnlineToggle()">
+      <span>Enable online features<small>Off by default. When on, your audio and text are sent to the provider you choose. Kothon stays fully offline until you turn this on.</small></span>
+    </label>
+    <div class="ai-fields" id="aiFields">
+      <div class="set-note ai-sub">API keys are stored in the Windows Credential Manager — never in Kothon's settings file, never shown again.</div>
+      <div id="providerKeys" class="ai-sub" style="display:flex; flex-direction:column; gap:8px;"></div>
+
+      <label class="field ai-sub">
+        <span class="field-label">Cloud speech-to-text</span>
+        <select class="input" id="setSttProvider"></select>
+      </label>
+      <label class="field ai-sub" id="sttModelField">
+        <span class="field-label">Speech model <em class="set-note" id="sttModelHint"></em></span>
+        <input type="text" class="input" id="setSttModel" spellcheck="false" placeholder="provider default">
+      </label>
+
+      <label class="toggle ai-sub">
+        <input type="checkbox" id="setRewrite" onchange="refreshAiState()">
+        <span>AI rewrite<small>Clean up grammar and punctuation with an LLM before typing. Falls back to the raw transcript if the call fails.</small></span>
+      </label>
+      <label class="field ai-sub">
+        <span class="field-label">Rewrite provider</span>
+        <select class="input" id="setRewriteProvider" onchange="refreshAiState()"></select>
+      </label>
+      <label class="field ai-sub">
+        <span class="field-label">Rewrite model <em class="set-note" id="rewriteModelHint"></em></span>
+        <input type="text" class="input" id="setRewriteModel" spellcheck="false" placeholder="provider default">
+      </label>
+      <label class="field ai-sub">
+        <span class="field-label">Rewrite instructions</span>
+        <textarea class="input" id="setRewritePrompt" spellcheck="false" rows="3"></textarea>
+      </label>
+    </div>
+
     <div class="set-section">Recent takes</div>
     <div class="field">
       <div class="history" id="historyList"></div>
@@ -659,6 +719,26 @@ input[type="range"] { width: 100%; accent-color: var(--jade); }
   <div class="overlay-foot">
     <button class="btn ghost" onclick="closeSettings()">Cancel</button>
     <button class="btn solid" onclick="saveSettings()">Save</button>
+  </div>
+</div>
+
+<!-- Online consent -->
+<div class="overlay" id="consentView" hidden>
+  <div class="onboard-body">
+    <svg class="onboard-mark" width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 2a10 10 0 1 0 10 10A10 10 0 0 0 12 2z"/><path d="M2 12h20M12 2a15 15 0 0 1 0 20M12 2a15 15 0 0 0 0 20"/></svg>
+    <div class="onboard-title">Leave the offline zone?</div>
+    <p style="font-size:13px; color:var(--muted); line-height:1.6;">
+      Kothon is fully offline by default — your voice never leaves your machine.
+      Turning on online features means the audio and text of what you dictate will
+      be sent to the cloud provider you choose (OpenAI, Google, OpenRouter, or
+      Anthropic) for transcription or rewriting. Your API key is stored in the
+      Windows Credential Manager.
+    </p>
+    <p style="font-size:12px; color:var(--faint);">You can turn this off again at any time.</p>
+  </div>
+  <div class="overlay-foot">
+    <button class="btn ghost" onclick="declineOnline()">Stay offline</button>
+    <button class="btn solid" onclick="acceptOnline()">Enable online features</button>
   </div>
 </div>
 
@@ -1179,6 +1259,7 @@ async function openSettings() {
   document.getElementById('setMinTo').value = s.minimize_to || 'mini';
   refreshSliderLabels();
   refreshSettingsState();
+  populateAiSettings(s);
   const hist = await window.pywebview.api.get_history();
   const list = document.getElementById('historyList');
   list.innerHTML = '';
@@ -1217,6 +1298,154 @@ function refreshSettingsState() {
   document.getElementById('silenceField').classList.toggle('disabled', !autoStop);
 }
 
+// ── AI & Cloud (online) ───────────────────────────────────────────────────────
+let AI = { providers: [], defaultPrompt: '' };
+function provMeta(id) { return AI.providers.find(p => p.id === id) || null; }
+
+function populateAiSettings(s) {
+  AI.providers = s.providers || [];
+  AI.defaultPrompt = s.default_rewrite_prompt || '';
+
+  document.getElementById('setOnline').checked = !!s.online_enabled;
+
+  const stt = document.getElementById('setSttProvider');
+  stt.innerHTML = '<option value="offline">Off — use the local model</option>';
+  for (const p of AI.providers.filter(p => p.supports_stt)) {
+    const o = document.createElement('option');
+    o.value = p.id; o.textContent = p.label; stt.appendChild(o);
+  }
+  stt.value = s.stt_provider || 'offline';
+  stt.onchange = refreshAiState;
+  document.getElementById('setSttModel').value = s.stt_model || '';
+
+  const rw = document.getElementById('setRewriteProvider');
+  rw.innerHTML = '';
+  for (const p of AI.providers.filter(p => p.supports_rewrite)) {
+    const o = document.createElement('option');
+    o.value = p.id; o.textContent = p.label; rw.appendChild(o);
+  }
+  rw.value = s.rewrite_provider || 'openai';
+  document.getElementById('setRewrite').checked = !!s.rewrite_enabled;
+  document.getElementById('setRewriteModel').value = s.rewrite_model || '';
+  const prompt = document.getElementById('setRewritePrompt');
+  prompt.value = s.rewrite_prompt || '';
+  prompt.placeholder = 'Leave blank to use Kothon’s default cleanup instructions.';
+
+  buildProviderRows();
+  updateModelHints();
+  refreshAiState();
+  updateOnlineBadge();
+}
+
+function buildProviderRows() {
+  const box = document.getElementById('providerKeys');
+  box.innerHTML = '';
+  for (const p of AI.providers) {
+    const caps = [p.supports_rewrite ? 'rewrite' : null, p.supports_stt ? 'speech' : null]
+      .filter(Boolean).join(' + ');
+    const row = document.createElement('div');
+    row.className = 'provider-row';
+    row.innerHTML =
+      `<div class="prov-name">${p.label} <span class="cap">${caps}</span></div>` +
+      `<input type="password" class="input prov-key" id="key_${p.id}" spellcheck="false" placeholder="Paste API key…" autocomplete="off">` +
+      `<button class="btn solid tiny" type="button">Save</button>` +
+      `<button class="btn ghost tiny" type="button">Test</button>` +
+      `<button class="btn ghost tiny" type="button">Clear</button>` +
+      `<div class="prov-state" id="state_${p.id}"></div>`;
+    const [saveB, testB, clearB] = row.querySelectorAll('button');
+    saveB.onclick = () => saveProviderKey(p.id);
+    testB.onclick = () => testProviderKey(p.id);
+    clearB.onclick = () => clearProviderKey(p.id);
+    box.appendChild(row);
+    setProviderState(p.id, p.key_set ? 'Key saved ✓' : 'No key set', p.key_set ? '' : 'warn');
+  }
+}
+
+function setProviderState(id, text, cls) {
+  const el = document.getElementById('state_' + id);
+  if (!el) return;
+  el.textContent = text;
+  el.className = 'prov-state' + (cls ? ' ' + cls : '');
+}
+
+async function saveProviderKey(id) {
+  const input = document.getElementById('key_' + id);
+  const val = input.value.trim();
+  if (!val) { setProviderState(id, 'Enter a key first.', 'warn'); return; }
+  setProviderState(id, 'Saving…');
+  const r = await window.pywebview.api.set_api_key(id, val);
+  input.value = '';  // never keep the secret in the DOM
+  const meta = provMeta(id); if (meta) meta.key_set = !!r.key_set;
+  setProviderState(id, r.success ? 'Key saved ✓' : (r.error || 'Failed'), r.success ? '' : 'warn');
+}
+
+async function testProviderKey(id) {
+  setProviderState(id, 'Testing…');
+  const model = id === document.getElementById('setRewriteProvider').value
+    ? document.getElementById('setRewriteModel').value.trim() : '';
+  const r = await window.pywebview.api.test_provider(id, model);
+  setProviderState(id, r.success ? (r.message || 'Connection OK.') : (r.error || 'Failed'),
+                   r.success ? '' : 'warn');
+}
+
+async function clearProviderKey(id) {
+  const r = await window.pywebview.api.clear_api_key(id);
+  const meta = provMeta(id); if (meta) meta.key_set = !!r.key_set;
+  setProviderState(id, 'No key set', 'warn');
+}
+
+function updateModelHints() {
+  const stt = provMeta(document.getElementById('setSttProvider').value);
+  document.getElementById('sttModelHint').textContent =
+    stt && stt.default_stt_model ? '(default: ' + stt.default_stt_model + ')' : '';
+  const rw = provMeta(document.getElementById('setRewriteProvider').value);
+  document.getElementById('rewriteModelHint').textContent =
+    rw && rw.default_rewrite_model ? '(default: ' + rw.default_rewrite_model + ')' : '';
+  const sttOn = document.getElementById('setSttProvider').value !== 'offline';
+  document.getElementById('sttModelField').classList.toggle('disabled', !sttOn);
+}
+
+function refreshAiState() {
+  const online = document.getElementById('setOnline').checked;
+  document.getElementById('aiFields').classList.toggle('disabled', !online);
+  updateModelHints();
+  updateOnlineBadge();
+}
+
+function updateOnlineBadge() {
+  const online = document.getElementById('setOnline').checked;
+  const active = online && (document.getElementById('setRewrite').checked
+    || document.getElementById('setSttProvider').value !== 'offline');
+  const badge = document.getElementById('onlineBadge');
+  if (badge) badge.hidden = !active;
+  const label = document.getElementById('modeLabel');
+  if (label) label.textContent = active ? 'Kothon · online' : 'Kothon · offline';
+}
+
+function onOnlineToggle() {
+  const box = document.getElementById('setOnline');
+  if (box.checked) {
+    box.checked = false;                       // not on until consent is given
+    document.getElementById('consentView').hidden = false;
+  } else {
+    if (window.pywebview) window.pywebview.api.set_online_enabled(false);
+    refreshAiState();
+  }
+}
+
+async function acceptOnline() {
+  document.getElementById('consentView').hidden = true;
+  document.getElementById('setOnline').checked = true;
+  if (window.pywebview) { try { await window.pywebview.api.set_online_enabled(true); } catch (e) {} }
+  refreshAiState();
+}
+
+function declineOnline() {
+  document.getElementById('consentView').hidden = true;
+  document.getElementById('setOnline').checked = false;
+  refreshAiState();
+}
+
 async function saveSettings() {
   const devVal = document.getElementById('setDevice').value;
   const cfg = {
@@ -1235,6 +1464,13 @@ async function saveSettings() {
     aggressive_banglish: document.getElementById('setAggr').checked,
     always_on_top: document.getElementById('setOnTop').checked,
     minimize_to: document.getElementById('setMinTo').value,
+    online_enabled: document.getElementById('setOnline').checked,
+    stt_provider: document.getElementById('setSttProvider').value,
+    stt_model: document.getElementById('setSttModel').value.trim(),
+    rewrite_enabled: document.getElementById('setRewrite').checked,
+    rewrite_provider: document.getElementById('setRewriteProvider').value,
+    rewrite_model: document.getElementById('setRewriteModel').value.trim(),
+    rewrite_prompt: document.getElementById('setRewritePrompt').value.trim(),
   };
   const r = await window.pywebview.api.apply_settings(cfg);
   if (r.success) {
@@ -1246,6 +1482,7 @@ async function saveSettings() {
     document.getElementById('micBtn').title = title;
     document.getElementById('miniMicBtn').title = title;
     TIPS[0] = `Press ${r.hotkey} from any app to start or stop.`;
+    updateOnlineBadge();
     closeSettings();
     setMsg('Settings saved.', 'success');
   } else {
@@ -1296,6 +1533,10 @@ async function init() {
     TIPS[0] = `Press ${S.hotkey} from any app to start or stop.`;
   }
   document.getElementById('modelTag').textContent = S.model;
+  if (S.online_active) {
+    document.getElementById('onlineBadge').hidden = false;
+    document.getElementById('modeLabel').textContent = 'Kothon · online';
+  }
   buildPills();
   refreshLiveEmpty();
   setMsg(S.hints[S.language] || 'Tap the mic and speak — text types into the focused app.');
