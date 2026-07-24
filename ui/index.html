@@ -924,7 +924,11 @@ function renderWaveInto(ctx) {
   ctx.globalAlpha = 1;
 }
 
-function drawWave() { CANVASES.forEach(renderWaveInto); }
+// Only one canvas is on-screen at a time (full view vs. mini bar). Drawing into
+// the hidden one every frame is wasted work, so we render just the active one.
+function activeCanvases() { return S.compact ? [CANVASES[1]] : [CANVASES[0]]; }
+
+function drawWave() { activeCanvases().forEach(renderWaveInto); }
 
 // Breathing baseline while idle with no last take — a recorder at rest
 let idleRaf = null;
@@ -947,14 +951,16 @@ function idleTickInto(ctx, t) {
 }
 
 function idleTick(t) {
-  CANVASES.forEach(ctx => idleTickInto(ctx, t));
+  activeCanvases().forEach(ctx => idleTickInto(ctx, t));
   idleRaf = requestAnimationFrame(idleTick);
 }
 
 function startIdleWave() {
   cancelAnimationFrame(idleRaf);
   const hasTrace = history.some(v => v > 0.02);
-  if (hasTrace || REDUCED_MOTION) { drawWave(); return; }  // keep last take frozen
+  // Freeze (draw one frame, no loop) when there's a take to keep, motion is
+  // reduced, or the window is hidden — no point animating what's off-screen.
+  if (hasTrace || REDUCED_MOTION || document.hidden) { drawWave(); return; }
   idleRaf = requestAnimationFrame(idleTick);
 }
 
@@ -1315,6 +1321,9 @@ async function toggleTheme() {
 function applyCompact(isCompact) {
   S.compact = isCompact;
   document.getElementById('appRoot').classList.toggle('compact', isCompact);
+  // The canvas that just became visible needs a paint; while listening the
+  // waveTick loop already covers the active one.
+  if (!S.isListening) startIdleWave();
 }
 
 async function toggleCompact() {
@@ -1545,6 +1554,17 @@ window.addEventListener('keydown', (e) => {
   if (e.code === 'Space')                      { e.preventDefault(); toggleListen(); }
   else if (e.key === 'c' || e.key === 'C')     { copyTranscript(); }
   else if (e.key === 'u' || e.key === 'U')     { undoLast(); }
+});
+
+// Pause the decorative idle waveform while the window is hidden (minimized or in
+// the tray). The recording loop is deliberately untouched — dictation into other
+// apps must keep its live meter even when Kothon isn't the focused window.
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    cancelAnimationFrame(idleRaf);
+  } else if (!S.isListening) {
+    startIdleWave();
+  }
 });
 
 // ── Init ────────────────────────────────────────────────────────────────────
