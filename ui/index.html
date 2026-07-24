@@ -749,8 +749,8 @@ kbd {
 
     <div class="set-section">Controls</div>
     <label class="field">
-      <span class="field-label">Hotkey</span>
-      <input type="text" class="input" id="setHotkey" spellcheck="false" placeholder="ctrl+shift+v">
+      <span class="field-label">Hotkey <em>click, then press the keys</em></span>
+      <input type="text" class="input" id="setHotkey" spellcheck="false" readonly placeholder="press a key combination…">
     </label>
     <label class="toggle">
       <input type="checkbox" id="setPtt">
@@ -1085,13 +1085,20 @@ function copySegment(span, text) {
   }
 }
 
+// A single long continuous dictation can finalize many segments; cap the number
+// of rendered nodes so the DOM doesn't grow without bound. segs[] keeps the full
+// text (it's cheap, and resets each take) so copy and word count stay complete.
+const MAX_SEG_NODES = 200;
+
 function onTyped(text) {
-  document.getElementById('liveConfirmed').appendChild(makeSeg(text, segs.length > 0, true));
+  const box = document.getElementById('liveConfirmed');
+  box.appendChild(makeSeg(text, segs.length > 0, true));
   segs.push(text);
+  while (box.childElementCount > MAX_SEG_NODES) box.removeChild(box.firstElementChild);
   document.getElementById('livePartial').textContent = '';
   refreshLiveEmpty();
-  const box = document.getElementById('liveText');
-  box.scrollTop = box.scrollHeight;
+  const live = document.getElementById('liveText');
+  live.scrollTop = live.scrollHeight;
 }
 
 function resetLive() {
@@ -1473,6 +1480,34 @@ for (const id of ['setSilence', 'setVad', 'setDelay']) {
   document.getElementById(id).addEventListener('input', refreshSliderLabels);
 }
 
+// ── Hotkey capture ──────────────────────────────────────────────────────────
+// The field records the actual key chord you press rather than making you type
+// a string, and renders it in the same "ctrl+shift+v" form the backend expects.
+function hotkeyKeyName(e) {
+  const k = e.key;
+  if (['Control', 'Shift', 'Alt', 'Meta'].includes(k)) return null;   // modifier alone
+  if (k === ' ' || e.code === 'Space') return 'space';
+  if (k.startsWith('Arrow')) return k.slice(5).toLowerCase();          // ArrowUp → up
+  return k.length === 1 ? k.toLowerCase() : k.toLowerCase();           // v, f5, enter…
+}
+function hotkeyComboFromEvent(e) {
+  const mods = [];
+  if (e.ctrlKey)  mods.push('ctrl');
+  if (e.shiftKey) mods.push('shift');
+  if (e.altKey)   mods.push('alt');
+  if (e.metaKey)  mods.push('windows');
+  const key = hotkeyKeyName(e);
+  if (!key) return null;               // only modifiers so far — keep listening
+  return [...mods, key].join('+');
+}
+document.getElementById('setHotkey').addEventListener('keydown', (e) => {
+  e.preventDefault();
+  if (e.key === 'Escape')  { e.target.blur(); return; }
+  if (e.key === 'Backspace' || e.key === 'Delete') { e.target.value = ''; return; }
+  const combo = hotkeyComboFromEvent(e);
+  if (combo) e.target.value = combo;
+});
+
 function closeSettings() { document.getElementById('settingsView').hidden = true; }
 
 function refreshSettingsState() {
@@ -1576,6 +1611,13 @@ async function init() {
   });
   const s = await window.pywebview.api.get_state();
   S = { ...S, ...s };
+  // First run: follow the OS light/dark preference instead of the stored night
+  // default, and persist it. We only switch to day when the system explicitly
+  // reports a light preference, so an unknown/dark scheme keeps night.
+  if (!S.onboarded && window.matchMedia && matchMedia('(prefers-color-scheme: light)').matches && S.theme !== 'day') {
+    S.theme = 'day';
+    try { await window.pywebview.api.set_theme('day'); } catch (e) {}
+  }
   applyTheme(S.theme);
   applyCompact(S.compact);
   if (S.version) {
