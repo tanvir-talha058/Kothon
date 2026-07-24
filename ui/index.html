@@ -69,6 +69,14 @@ body::before {
     radial-gradient(140% 100% at 50% 116%, rgba(26,26,23,0.06), transparent 60%);
 }
 
+/* Visually hidden, but read by screen readers — used for a dedicated announce
+   channel so meaningful events (results, errors) are spoken without the idle
+   tips in #msg being read aloud every few seconds. */
+.sr-only {
+  position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
 .app { position: relative; z-index: 1; width: 100%; height: 100vh; }
 .full-view { display: flex; flex-direction: column; width: 100%; height: 100%; }
 .mini-view { display: none; }
@@ -304,6 +312,7 @@ body::before {
 }
 :root[data-theme="day"] #liveConfirmed .seg:hover { background: rgba(15,122,102,0.12); box-shadow: 0 0 0 2px rgba(15,122,102,0.12); }
 #liveConfirmed .seg.copied { background: var(--jade); color: #06110d; box-shadow: none; }
+#liveConfirmed .seg:focus-visible { outline: 2px solid var(--jade); outline-offset: 1px; }
 @keyframes seg-in { from { opacity: 0; transform: translateY(3px); } }
 .word-count { color: var(--faint); text-transform: none; letter-spacing: 0.05em; }
 /* Partial (still-forming) text reads as wet ink: a slow shimmer travels through
@@ -317,6 +326,14 @@ body::before {
   animation: ink-shimmer 2.1s linear infinite;
 }
 @keyframes ink-shimmer { from { background-position: 140% 0; } to { background-position: -40% 0; } }
+/* With motion reduced the shimmer can't animate — a frozen gradient would just
+   hurt legibility, so fall back to a plain, readable muted fill. */
+@media (prefers-reduced-motion: reduce) {
+  .live-box.recording #livePartial:not(:empty) {
+    background: none; animation: none;
+    -webkit-text-fill-color: var(--muted); color: var(--muted);
+  }
+}
 .live-cursor {
   display: none; width: 2px; height: 14px;
   background: var(--rec); border-radius: 1px;
@@ -587,6 +604,8 @@ kbd {
 
 <div class="app" id="appRoot">
 
+<div id="srAnnounce" class="sr-only" role="alert" aria-live="assertive" aria-atomic="true"></div>
+
 <div class="full-view" id="fullView">
 
   <!-- Title bar -->
@@ -602,38 +621,38 @@ kbd {
       <span class="latin">Kothon · offline</span>
     </div>
     <div class="win-controls">
-      <button class="win-btn" onclick="openSettings()" title="Settings">
+      <button class="win-btn" onclick="openSettings()" title="Settings" aria-label="Settings">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
       </button>
-      <button class="win-btn" id="themeBtn" onclick="toggleTheme()" title="Switch day / night mode">
+      <button class="win-btn" id="themeBtn" onclick="toggleTheme()" title="Switch day / night mode" aria-label="Switch day or night theme">
         <svg class="sun-ico" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
         <svg class="moon-ico" width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
       </button>
-      <button class="win-btn"   onclick="minWin()"   title="Minimize to mini bar">&#8722;</button>
-      <button class="win-btn x" onclick="closeWin()" title="Close">&#10005;</button>
+      <button class="win-btn"   onclick="minWin()"   title="Minimize to mini bar" aria-label="Minimize to mini bar">&#8722;</button>
+      <button class="win-btn x" onclick="closeWin()" title="Close" aria-label="Close">&#10005;</button>
     </div>
   </div>
 
   <!-- Status strip -->
   <div class="status-strip">
-    <div class="dot" id="dot"></div>
-    <span class="status-text" id="statusText">Ready</span>
-    <span class="timer" id="timer">00:00</span>
+    <div class="dot" id="dot" aria-hidden="true"></div>
+    <span class="status-text" id="statusText" role="status" aria-live="polite">Ready</span>
+    <span class="timer" id="timer" aria-hidden="true">00:00</span>
   </div>
 
   <!-- The matra: the headstroke a Bangla page hangs from. Everything below
        descends from this line; it draws itself in on load, like a pen stroke. -->
-  <div class="matra" id="matra"></div>
+  <div class="matra" id="matra" aria-hidden="true"></div>
 
   <!-- Mic + waveform -->
   <div class="mic-section">
     <div class="mic-wrap" id="micWrap">
-      <div class="mic-halo" id="micHalo"></div>
-      <svg class="level-ring" viewBox="0 0 128 128">
+      <div class="mic-halo" id="micHalo" aria-hidden="true"></div>
+      <svg class="level-ring" viewBox="0 0 128 128" aria-hidden="true">
         <circle class="track" cx="64" cy="64" r="60"/>
         <circle class="fill" id="ringFill" cx="64" cy="64" r="60"/>
       </svg>
-      <button class="mic-btn" id="micBtn" onclick="toggleListen()" title="Start or stop dictation (Ctrl+Shift+V)">
+      <button class="mic-btn" id="micBtn" onclick="toggleListen()" title="Start or stop dictation (Ctrl+Shift+V)" aria-label="Start dictation" aria-pressed="false">
         <svg class="mic-svg" width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
           <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
           <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
@@ -644,7 +663,7 @@ kbd {
         </svg>
       </button>
     </div>
-    <canvas class="wave-canvas" id="wave" width="600" height="112"></canvas>
+    <canvas class="wave-canvas" id="wave" width="600" height="112" aria-hidden="true"></canvas>
   </div>
 
   <!-- Transcript -->
@@ -658,7 +677,7 @@ kbd {
       </span>
     </div>
     <div class="live-text empty" id="liveText" data-placeholder="আপনার কথা এখানে কালি হয়ে আসবে · your words appear here as ink">
-      <span id="liveConfirmed"></span><span id="livePartial"></span><span class="live-cursor"></span>
+      <span id="liveConfirmed" role="log" aria-live="polite" aria-relevant="additions" aria-label="Transcript"></span><span id="livePartial" aria-hidden="true"></span><span class="live-cursor" aria-hidden="true"></span>
     </div>
   </div>
 
@@ -684,8 +703,8 @@ kbd {
 <!-- Mini bar — a small floating dock; dictates into whatever field is focused
      elsewhere, without needing the full window open -->
 <div class="mini-view" id="miniView">
-  <div class="mini-dot" id="miniDot"></div>
-  <button class="mini-mic" id="miniMicBtn" onclick="toggleListen()" title="Start or stop dictation (Ctrl+Shift+V)">
+  <div class="mini-dot" id="miniDot" aria-hidden="true"></div>
+  <button class="mini-mic" id="miniMicBtn" onclick="toggleListen()" title="Start or stop dictation (Ctrl+Shift+V)" aria-label="Start dictation" aria-pressed="false">
     <svg class="mic-svg" width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3z"/>
       <path d="M19 10v2a7 7 0 0 1-14 0v-2"/>
@@ -695,19 +714,19 @@ kbd {
       <rect x="6" y="6" width="12" height="12" rx="2.5"/>
     </svg>
   </button>
-  <canvas class="mini-wave" id="miniWave" width="200" height="56"></canvas>
-  <span class="mini-timer" id="miniTimer"></span>
-  <button class="mini-expand" onclick="toggleCompact()" title="Expand to full window">
-    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8V5a2 2 0 0 1 2-2h3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M21 16v3a2 2 0 0 1-2 2h-3"/></svg>
+  <canvas class="mini-wave" id="miniWave" width="200" height="56" aria-hidden="true"></canvas>
+  <span class="mini-timer" id="miniTimer" aria-hidden="true"></span>
+  <button class="mini-expand" onclick="toggleCompact()" title="Expand to full window" aria-label="Expand to full window">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 8V5a2 2 0 0 1 2-2h3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M21 16v3a2 2 0 0 1-2 2h-3"/></svg>
   </button>
-  <button class="mini-expand" onclick="hideWin()" title="Hide to tray">&#8722;</button>
+  <button class="mini-expand" onclick="hideWin()" title="Hide to tray" aria-label="Hide to tray">&#8722;</button>
 </div>
 
 <!-- Settings -->
-<div class="overlay" id="settingsView" hidden>
+<div class="overlay" id="settingsView" hidden role="dialog" aria-modal="true" aria-label="Settings">
   <div class="overlay-head">
     <span class="overlay-title">Settings</span>
-    <button class="win-btn" onclick="closeSettings()" title="Close settings">&#10005;</button>
+    <button class="win-btn" onclick="closeSettings()" title="Close settings" aria-label="Close settings">&#10005;</button>
   </div>
   <div class="overlay-body">
     <div class="set-section">Microphone</div>
@@ -797,7 +816,7 @@ kbd {
 </div>
 
 <!-- First-run onboarding -->
-<div class="overlay" id="onboardView" hidden>
+<div class="overlay" id="onboardView" hidden role="dialog" aria-modal="true" aria-label="Welcome">
   <div class="onboard-body">
     <svg class="onboard-mark" width="40" height="40" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true">
       <rect x="74" y="88" width="22" height="72" rx="11"/>
@@ -820,7 +839,7 @@ kbd {
 
 <!-- Keyboard shortcuts cheat-sheet -->
 <div class="kbd-overlay" id="shortcutsView" hidden onclick="if(event.target===this)closeShortcuts()">
-  <div class="kbd-card" role="dialog" aria-label="Keyboard shortcuts">
+  <div class="kbd-card" role="dialog" aria-modal="true" aria-label="Keyboard shortcuts" tabindex="-1">
     <div class="kbd-title">Keyboard shortcuts</div>
     <div class="kbd-row"><span>Start / stop dictation</span><span class="kbd-keys"><kbd id="kbdHotkey">Ctrl+Shift+V</kbd></span></div>
     <div class="kbd-row"><span>Toggle when window focused</span><span class="kbd-keys"><kbd>Space</kbd></span></div>
@@ -1029,14 +1048,21 @@ function onPartial(text) {
   box.scrollTop = box.scrollHeight;
 }
 
-// Each confirmed segment is its own clickable span — click to copy just that
-// word/phrase. Kept in one builder so onTyped and renderSegs stay in sync.
+// Each confirmed segment is its own clickable, keyboard-focusable control —
+// activate it to copy just that word/phrase.
 function makeSeg(text, leading, animate) {
   const seg = document.createElement('span');
   seg.className = 'seg';
   seg.textContent = (leading ? ' ' : '') + text;
   seg.title = 'Click to copy';
+  // Reachable and operable by keyboard, not just the mouse
+  seg.setAttribute('role', 'button');
+  seg.tabIndex = 0;
+  seg.setAttribute('aria-label', `Copy "${text}"`);
   seg.onclick = () => copySegment(seg, text);
+  seg.onkeydown = (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); copySegment(seg, text); }
+  };
   if (!animate) seg.style.animation = 'none';
   return seg;
 }
@@ -1062,13 +1088,6 @@ function onTyped(text) {
   box.scrollTop = box.scrollHeight;
 }
 
-function renderSegs() {
-  const box = document.getElementById('liveConfirmed');
-  box.textContent = '';
-  segs.forEach((text, i) => box.appendChild(makeSeg(text, i > 0, false)));
-  refreshLiveEmpty();
-}
-
 function resetLive() {
   segs = [];
   document.getElementById('liveConfirmed').textContent = '';
@@ -1081,7 +1100,11 @@ async function undoLast() {
   const r = await window.pywebview.api.undo_last();
   if (r.success) {
     segs.pop();
-    renderSegs();
+    // Remove just the last segment node so the log region doesn't re-announce
+    // the whole transcript on every undo.
+    const box = document.getElementById('liveConfirmed');
+    if (box.lastElementChild) box.removeChild(box.lastElementChild);
+    refreshLiveEmpty();
     setMsg(`Removed: "${r.text}"`, 'success');
   } else {
     setMsg(r.error || 'Nothing to undo.', 'error');
@@ -1119,11 +1142,19 @@ function clearTranscript() {
 }
 
 // ── Keyboard shortcuts cheat-sheet ──────────────────────────────────────────
+let kbdReturnFocus = null;
 function openShortcuts() {
   document.getElementById('kbdHotkey').textContent = S.hotkey || 'Ctrl+Shift+V';
-  document.getElementById('shortcutsView').hidden = false;
+  const v = document.getElementById('shortcutsView');
+  kbdReturnFocus = document.activeElement;
+  v.hidden = false;
+  v.querySelector('.kbd-card').focus();   // move focus into the dialog
 }
-function closeShortcuts() { document.getElementById('shortcutsView').hidden = true; }
+function closeShortcuts() {
+  document.getElementById('shortcutsView').hidden = true;
+  if (kbdReturnFocus && kbdReturnFocus.focus) kbdReturnFocus.focus();   // restore
+  kbdReturnFocus = null;
+}
 
 // ── Python callbacks ────────────────────────────────────────────────────────
 function onAutoStop(result) {
@@ -1136,9 +1167,11 @@ function onAutoStop(result) {
     setMsg(`Typed: "${result.text}"`, 'success');
   } else if (result.success) {
     setMsg('Stopped after silence — no speech detected.');
+    announce('Stopped after silence. No speech detected.');
   } else {
     setStatus('Error', 'error');
     setMsg(result.error || 'Something went wrong while stopping.', 'error');
+    announce(result.error || 'Something went wrong while stopping.');
   }
 }
 
@@ -1147,6 +1180,7 @@ function onError(message) {
   setIdleUI();
   setStatus('Error', 'error');
   setMsg(message, 'error');
+  announce(message);
 }
 
 // ── UI helpers ──────────────────────────────────────────────────────────────
@@ -1169,6 +1203,14 @@ function setMsg(text, type = '') {
   }
 }
 
+// Speak a meaningful event (a result or an error) to screen readers. Kept
+// separate from #msg so the rotating idle tips are never announced.
+function announce(text) {
+  const el = document.getElementById('srAnnounce');
+  el.textContent = '';
+  requestAnimationFrame(() => { el.textContent = text; });
+}
+
 // Native-script labels — the API keeps English values
 const LANG_LABELS = { 'Bangla': 'বাংলা', 'English': 'English', 'Banglish': 'বাংলিশ' };
 
@@ -1180,9 +1222,21 @@ function buildPills() {
     btn.className = 'lang-pill' + (lang === S.language ? ' active' : '');
     btn.textContent = LANG_LABELS[lang] || lang;
     btn.title = lang;
+    btn.setAttribute('aria-label', lang);
+    btn.setAttribute('aria-pressed', lang === S.language ? 'true' : 'false');
     btn.disabled = S.isListening;
     btn.onclick = () => pickLang(lang);
     rail.appendChild(btn);
+  }
+}
+
+// Keep the mic buttons' assistive label and toggle state in sync with recording
+function setMicButtonState(listening) {
+  const label = listening ? 'Stop dictation' : 'Start dictation';
+  for (const id of ['micBtn', 'miniMicBtn']) {
+    const b = document.getElementById(id);
+    b.setAttribute('aria-pressed', listening ? 'true' : 'false');
+    b.setAttribute('aria-label', label);
   }
 }
 
@@ -1191,6 +1245,7 @@ function setListeningUI() {
   document.getElementById('micWrap').classList.add('listening');
   document.getElementById('miniView').classList.add('listening');
   document.getElementById('liveBox').classList.add('recording');
+  setMicButtonState(true);
   resetLive();
   history.fill(0);
   rawLevel = 0; displayLevel = 0;
@@ -1208,6 +1263,7 @@ function setIdleUI() {
   document.getElementById('micWrap').classList.remove('listening');
   document.getElementById('miniView').classList.remove('listening');
   document.getElementById('liveBox').classList.remove('recording');
+  setMicButtonState(false);
   document.getElementById('livePartial').textContent = '';
   refreshLiveEmpty();
   stopTimer();
@@ -1278,6 +1334,7 @@ async function startListen() {
   } else {
     setStatus('Error', 'error');
     setMsg(r.error || 'Could not open the microphone.', 'error');
+    announce(r.error || 'Could not open the microphone.');
   }
 }
 
@@ -1296,10 +1353,12 @@ async function stopListen() {
     } else {
       setStatus('Ready');
       setMsg('No speech detected — try again a little closer to the mic.');
+      announce('No speech detected. Try again a little closer to the mic.');
     }
   } else {
     setStatus('Error', 'error');
     setMsg(r.error || 'Something went wrong.', 'error');
+    announce(r.error || 'Something went wrong.');
   }
 }
 
