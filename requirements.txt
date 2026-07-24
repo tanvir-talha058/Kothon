@@ -8,3 +8,5 @@ pywebview==6.2.1
 keyboard==0.13.5
 pystray==0.19.5
 Pillow==11.3.0
+# Optional cloud features: stores API keys in the Windows Credential Manager
+keyring==25.6.0

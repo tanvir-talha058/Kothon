@@ -5,7 +5,13 @@ from PyInstaller.utils.hooks import collect_all
 
 datas = [("ui", "ui")]
 binaries = []
-hiddenimports = []
+# keyring picks its backend by entry point at runtime; PyInstaller can't see
+# that, so name the Windows Credential Manager backend explicitly.
+hiddenimports = [
+    "keyring.backends.Windows",
+    "keyring.backends.chainer",
+    "keyring.backends.fail",
+]
 
 for pkg in ("vosk", "sherpa_onnx"):
     d, b, h = collect_all(pkg)

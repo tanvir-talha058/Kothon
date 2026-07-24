@@ -152,3 +152,76 @@ class SherpaRecognizer:
             text = self.recognizer.get_result(self.stream).strip()
             self.stream = self.recognizer.create_stream()
         return text
+
+
+class CloudRecognizer:
+    """Speech-to-text via a cloud provider (OpenAI / Gemini).
+
+    Cloud STT is not streaming: ``accept_audio`` buffers the utterance and
+    returns "" (no live partials), then ``finalize_text`` uploads the buffered
+    audio as a WAV and returns the transcript. It honours the same recognizer
+    contract as the offline engines so it drops into the audio worker loop
+    unchanged — text is emitted only through the stop/finalize path.
+
+    On any provider failure it returns "" and records ``last_error`` (surfaced
+    via ``on_error``); the offline engines remain available.
+    """
+
+    _MAX_SECONDS = 60  # cap the buffer so a stuck mic can't build a huge upload
+
+    def __init__(self, provider: str, model: str, api_key: str,
+                 samplerate: int = 16000, on_error=None) -> None:
+        self.provider = provider
+        self.model = model
+        self.api_key = api_key
+        self.samplerate = samplerate
+        self.on_error = on_error
+        self.last_error: str | None = None
+        self._max_bytes = self._MAX_SECONDS * samplerate * 2  # int16 mono
+        self._buffer = bytearray()
+        self._lock = threading.Lock()
+
+    def reset(self) -> None:
+        with self._lock:
+            self._buffer = bytearray()
+
+    def accept_audio(self, audio_chunk: bytes) -> str:
+        if not audio_chunk:
+            return ""
+        with self._lock:
+            if len(self._buffer) < self._max_bytes:
+                self._buffer.extend(audio_chunk)
+        return ""  # cloud STT has no mid-stream endpoints
+
+    def get_partial_text(self) -> str:
+        return ""  # no live partials for cloud STT
+
+    def _build_wav(self, pcm: bytes) -> bytes:
+        import io
+        import wave
+
+        buf = io.BytesIO()
+        with wave.open(buf, "wb") as wav:
+            wav.setnchannels(1)
+            wav.setsampwidth(2)  # int16
+            wav.setframerate(self.samplerate)
+            wav.writeframes(pcm)
+        return buf.getvalue()
+
+    def finalize_text(self) -> str:
+        import providers
+
+        with self._lock:
+            pcm = bytes(self._buffer)
+            self._buffer = bytearray()
+        if not pcm:
+            return ""
+        self.last_error = None
+        try:
+            wav_bytes = self._build_wav(pcm)
+            return providers.transcribe(self.provider, self.api_key, self.model, wav_bytes).strip()
+        except Exception as exc:
+            self.last_error = str(exc)
+            if self.on_error:
+                self.on_error(f"Cloud transcription failed: {exc}")
+            return ""

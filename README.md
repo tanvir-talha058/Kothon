@@ -27,6 +27,7 @@ No internet required — all processing happens on your machine.
 - Day/night theme, custom hotkey, optional start-with-Windows (tray menu)
 - Single-instance guard — launching Kothon twice just points you at the running copy
 - Remembers language, theme, hotkey, and window position (`~/.kothon/settings.json`); activity log at `~/.kothon/kothon.log`
+- **Optional online providers** (off by default): bring your own API key for OpenAI, Google Gemini, OpenRouter, or Anthropic Claude to get AI transcript cleanup, and cloud speech-to-text via OpenAI or Gemini (see below)
 
 ## Requirements
 
@@ -41,7 +42,7 @@ No internet required — all processing happens on your machine.
 pip install -r requirements.txt
 ```
 
-Dependencies: `vosk`, `sherpa-onnx`, `numpy`, `sounddevice`, `pywebview`, `keyboard`, `pystray`, `Pillow`.
+Dependencies: `vosk`, `sherpa-onnx`, `numpy`, `sounddevice`, `pywebview`, `keyboard`, `pystray`, `Pillow`, `keyring` (for storing optional cloud API keys in the Windows Credential Manager).
 (`sherpa-onnx` powers Bangla recognition — without it, Bangla mode will not work.
 `keyboard`, `pystray`, and `Pillow` are optional — without them you lose the global hotkey and tray icon, but the app still runs.)
 
@@ -119,9 +120,31 @@ Entries apply in Bangla/Banglish modes and take priority over the built-in dicti
 - **Bangla output is poor** — install a Bangla-capable Vosk model; the bundled English model cannot recognize Bangla speech. Banglish word conversion only fixes spelling of romanized words the recognizer got right.
 - **Mic errors** — check Windows microphone privacy settings and that no app holds the mic exclusively.
 
+## Optional online providers
+
+Kothon is **fully offline by default** and that is the recommended way to use it.
+If you want higher accuracy or grammar cleanup and are comfortable sending your
+speech to a third party, open **Settings → AI & Cloud (online)**:
+
+1. Turn on **Enable online features** (a one-time consent dialog explains what
+   leaves your machine; an **online** badge then shows in the title bar).
+2. Paste an API key for OpenAI, Google Gemini, OpenRouter, or Anthropic Claude
+   and click **Save** / **Test**. Keys are stored in the **Windows Credential
+   Manager** — never in `settings.json` and never displayed again.
+3. Optionally pick a **Cloud speech-to-text** provider (OpenAI or Gemini), and/or
+   enable **AI rewrite** to clean up grammar and punctuation before typing.
+
+If a cloud call fails, AI rewrite falls back to the raw transcript (you never lose
+your words) and cloud speech-to-text surfaces an error while offline stays usable.
+Note that cloud speech-to-text is not live — text appears when you stop dictating,
+not word-by-word.
+
 ## Privacy
 
-All recognition runs locally. No audio or text ever leaves your machine.
+By default, all recognition runs locally and no audio or text ever leaves your
+machine. This changes **only** if you explicitly enable online features and add an
+API key (see above); Kothon then sends audio and/or text to the provider you
+choose. There are still no accounts, no telemetry, and no Kothon servers.
 
 ## License
 
