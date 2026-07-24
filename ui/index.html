@@ -53,6 +53,7 @@ html, body {
   overflow: hidden;
   -webkit-font-smoothing: antialiased;
   user-select: none;
+  transition: background-color 0.45s ease, color 0.45s ease;
 }
 
 /* Soft vignette so the flat ink background has depth without decoration */
@@ -133,8 +134,10 @@ body::before {
   flex-shrink: 0; transition: background 0.25s, box-shadow 0.25s;
 }
 .dot.listening { background: var(--rec); box-shadow: 0 0 8px rgba(226,75,61,0.7); animation: pulse 1.3s ease-in-out infinite; }
-.dot.busy      { background: var(--amber); box-shadow: 0 0 6px rgba(224,162,58,0.5); }
+.dot.busy      { background: var(--amber); box-shadow: 0 0 6px rgba(224,162,58,0.5); animation: pulse 1s ease-in-out infinite; }
 .dot.error     { background: var(--amber); box-shadow: 0 0 6px rgba(224,162,58,0.6); }
+.dot.done      { background: var(--jade); box-shadow: 0 0 9px rgba(92,203,170,0.7); animation: dot-pop 0.55s cubic-bezier(0.34,1.56,0.64,1); }
+@keyframes dot-pop { 0% { transform: scale(0.4); } 55% { transform: scale(1.4); } 100% { transform: scale(1); } }
 @keyframes pulse { 50% { opacity: 0.35; } }
 .status-text { font-size: 12px; font-weight: 600; letter-spacing: 0.04em; color: var(--muted); transition: color 0.25s; }
 .status-text.listening { color: var(--rec); }
@@ -169,14 +172,37 @@ body::before {
 }
 .mic-wrap { position: relative; width: 128px; height: 128px; flex-shrink: 0; }
 
+/* Live level halo — a soft ink-bloom behind the mic that swells with the voice.
+   Scale + opacity are driven from JS via the --level custom property (0–1). */
+.mic-halo {
+  position: absolute; inset: -6px; border-radius: 50%; pointer-events: none;
+  background: radial-gradient(circle at 50% 50%, rgba(92,203,170,0.55), transparent 66%);
+  opacity: calc(var(--level, 0) * 0.6);
+  transform: scale(calc(0.9 + var(--level, 0) * 0.28));
+  transition: opacity 0.14s linear, background 0.3s;
+  will-change: transform, opacity;
+}
+.mic-wrap.listening .mic-halo {
+  background: radial-gradient(circle at 50% 50%, rgba(226,75,61,0.6), transparent 66%);
+  opacity: calc(0.14 + var(--level, 0) * 0.66);
+}
+:root[data-theme="day"] .mic-halo {
+  background: radial-gradient(circle at 50% 50%, rgba(15,122,102,0.4), transparent 66%);
+}
+:root[data-theme="day"] .mic-wrap.listening .mic-halo {
+  background: radial-gradient(circle at 50% 50%, rgba(195,57,43,0.45), transparent 66%);
+}
+
 /* Live level ring — stroke driven by RMS from Python */
 .level-ring { position: absolute; inset: 0; transform: rotate(-90deg); pointer-events: none; }
 .level-ring .track { fill: none; stroke: var(--border); stroke-width: 2; }
 .level-ring .fill  {
   fill: none; stroke: var(--jade); stroke-width: 2.5; stroke-linecap: round;
   stroke-dasharray: 377; stroke-dashoffset: 377;
-  transition: stroke-dashoffset 0.12s linear, stroke 0.3s;
+  filter: drop-shadow(0 0 3px rgba(92,203,170,0.5));
+  transition: stroke-dashoffset 0.14s cubic-bezier(0.22,1,0.36,1), stroke 0.3s, filter 0.3s;
 }
+.mic-wrap.listening .level-ring .fill { filter: drop-shadow(0 0 4px rgba(226,75,61,0.55)); }
 .mic-wrap.listening .level-ring .fill { stroke: var(--rec); }
 
 .mic-btn {
@@ -219,8 +245,19 @@ body::before {
 .mic-wrap.listening .mic-svg  { display: none; }
 .mic-wrap.listening .stop-svg { display: block; }
 
-/* Scrolling waveform history */
+/* Scrolling waveform history. The bloom is a single GPU-composited glow whose
+   radius follows the shared --level, rather than a costly per-bar canvas shadow. */
 .wave-canvas { width: 300px; height: 56px; flex-shrink: 0; }
+.wave-canvas, .mini-wave {
+  filter: drop-shadow(0 0 calc(var(--level, 0) * 5px) rgba(92,203,170,0.5));
+  transition: filter 0.12s linear;
+}
+.app.listening .wave-canvas, .app.listening .mini-wave {
+  filter: drop-shadow(0 0 calc(var(--level, 0) * 6px) rgba(226,75,61,0.55));
+}
+:root[data-theme="day"] .wave-canvas, :root[data-theme="day"] .mini-wave {
+  filter: drop-shadow(0 0 calc(var(--level, 0) * 4px) rgba(15,122,102,0.4));
+}
 
 /* ── Transcript ── */
 .live-box {
@@ -256,10 +293,30 @@ body::before {
 .live-text::-webkit-scrollbar-thumb { background: var(--jade-dim); border-radius: 2px; }
 .live-text.empty::before { content: attr(data-placeholder); color: var(--faint); font-size: 12.5px; }
 #liveConfirmed { color: var(--text); }
-#liveConfirmed .seg { animation: seg-in 0.45s ease both; }
-@keyframes seg-in { from { opacity: 0; } }
+#liveConfirmed .seg {
+  animation: seg-in 0.45s cubic-bezier(0.22,1,0.36,1) both;
+  border-radius: 4px; cursor: pointer;
+  transition: background 0.15s, color 0.15s, box-shadow 0.15s;
+}
+#liveConfirmed .seg:hover {
+  background: rgba(92,203,170,0.12);
+  box-shadow: 0 0 0 2px rgba(92,203,170,0.12);
+}
+:root[data-theme="day"] #liveConfirmed .seg:hover { background: rgba(15,122,102,0.12); box-shadow: 0 0 0 2px rgba(15,122,102,0.12); }
+#liveConfirmed .seg.copied { background: var(--jade); color: #06110d; box-shadow: none; }
+@keyframes seg-in { from { opacity: 0; transform: translateY(3px); } }
 .word-count { color: var(--faint); text-transform: none; letter-spacing: 0.05em; }
+/* Partial (still-forming) text reads as wet ink: a slow shimmer travels through
+   it while recording, so confirmed vs. in-progress text is legible at a glance. */
 #livePartial   { color: var(--muted); }
+.live-box.recording #livePartial:not(:empty) {
+  background: linear-gradient(100deg, var(--muted) 30%, var(--jade) 50%, var(--muted) 70%);
+  background-size: 220% 100%;
+  -webkit-background-clip: text; background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: ink-shimmer 2.1s linear infinite;
+}
+@keyframes ink-shimmer { from { background-position: 140% 0; } to { background-position: -40% 0; } }
 .live-cursor {
   display: none; width: 2px; height: 14px;
   background: var(--rec); border-radius: 1px;
@@ -473,6 +530,54 @@ input[type="range"] { width: 100%; accent-color: var(--jade); }
 .onboard-step p { font-size: 13px; color: var(--muted); line-height: 1.55; }
 .onboard-step p b { color: var(--text); font-weight: 600; }
 
+/* ── Keyboard shortcuts cheat-sheet (press ?) ── */
+.kbd-overlay {
+  position: fixed; inset: 0; z-index: 40;
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px;
+  background: rgba(6,8,10,0.55); backdrop-filter: blur(3px);
+  animation: kbd-fade 0.18s ease both;
+}
+:root[data-theme="day"] .kbd-overlay { background: rgba(26,26,23,0.28); }
+.kbd-overlay[hidden] { display: none; }
+@keyframes kbd-fade { from { opacity: 0; } }
+.kbd-card {
+  width: 100%; max-width: 300px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 14px;
+  box-shadow: 0 18px 50px rgba(0,0,0,0.5);
+  padding: 16px 18px 18px;
+  animation: kbd-pop 0.24s cubic-bezier(0.22,1,0.36,1) both;
+}
+@keyframes kbd-pop { from { opacity: 0; transform: translateY(8px) scale(0.97); } }
+.kbd-title {
+  font-family: 'Cascadia Mono', Consolas, monospace;
+  font-size: 9.5px; letter-spacing: 0.2em; text-transform: uppercase;
+  color: var(--jade); margin-bottom: 12px;
+}
+.kbd-row {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 12px; padding: 6px 0; border-top: 1px solid var(--border);
+  font-size: 12.5px; color: var(--text);
+}
+.kbd-row:first-of-type { border-top: none; }
+.kbd-keys { display: flex; gap: 4px; flex-shrink: 0; }
+kbd {
+  font-family: 'Cascadia Mono', Consolas, monospace; font-size: 10.5px;
+  padding: 2px 7px; border-radius: 6px; color: var(--muted);
+  background: var(--raise); border: 1px solid var(--border);
+  box-shadow: 0 1px 0 rgba(0,0,0,0.25);
+}
+.kbd-hint {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 10px; color: var(--faint);
+  -webkit-app-region: no-drag; app-region: no-drag;
+  background: transparent; border: none; cursor: pointer; font-family: inherit;
+  transition: color 0.15s;
+}
+.kbd-hint:hover { color: var(--muted); }
+.kbd-hint kbd { font-size: 9.5px; padding: 1px 5px; }
+.kbd-hint:focus-visible { outline: 1.5px solid var(--jade); outline-offset: 2px; border-radius: 4px; }
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
 }
@@ -523,6 +628,7 @@ input[type="range"] { width: 100%; accent-color: var(--jade); }
   <!-- Mic + waveform -->
   <div class="mic-section">
     <div class="mic-wrap" id="micWrap">
+      <div class="mic-halo" id="micHalo"></div>
       <svg class="level-ring" viewBox="0 0 128 128">
         <circle class="track" cx="64" cy="64" r="60"/>
         <circle class="fill" id="ringFill" cx="64" cy="64" r="60"/>
@@ -547,6 +653,7 @@ input[type="range"] { width: 100%; accent-color: var(--jade); }
       <span class="live-label">Transcript <span class="word-count" id="wordCount"></span></span>
       <span>
         <button class="copy-btn" id="undoBtn" onclick="undoLast()" title="Erase the last typed segment">undo</button>
+        <button class="copy-btn" id="clearBtn" onclick="clearTranscript()" title="Clear this panel (does not erase typed text)">clear</button>
         <button class="copy-btn" id="copyBtn" onclick="copyTranscript()" title="Copy transcript">copy</button>
       </span>
     </div>
@@ -566,6 +673,9 @@ input[type="range"] { width: 100%; accent-color: var(--jade); }
   <!-- Footer -->
   <div class="footer">
     <span class="model-tag" id="modelTag">loading…</span>
+    <button class="kbd-hint" onclick="openShortcuts()" title="Keyboard shortcuts">
+      <kbd>?</kbd> shortcuts
+    </button>
     <span class="hotkey-tag"><span id="versionTag"></span><b id="hotkeyTag">Ctrl+Shift+V</b></span>
   </div>
 
@@ -708,6 +818,20 @@ input[type="range"] { width: 100%; accent-color: var(--jade); }
   </div>
 </div>
 
+<!-- Keyboard shortcuts cheat-sheet -->
+<div class="kbd-overlay" id="shortcutsView" hidden onclick="if(event.target===this)closeShortcuts()">
+  <div class="kbd-card" role="dialog" aria-label="Keyboard shortcuts">
+    <div class="kbd-title">Keyboard shortcuts</div>
+    <div class="kbd-row"><span>Start / stop dictation</span><span class="kbd-keys"><kbd id="kbdHotkey">Ctrl+Shift+V</kbd></span></div>
+    <div class="kbd-row"><span>Toggle when window focused</span><span class="kbd-keys"><kbd>Space</kbd></span></div>
+    <div class="kbd-row"><span>Copy transcript</span><span class="kbd-keys"><kbd>C</kbd></span></div>
+    <div class="kbd-row"><span>Undo last segment</span><span class="kbd-keys"><kbd>U</kbd></span></div>
+    <div class="kbd-row"><span>Click any word</span><span class="kbd-keys"><kbd>copies it</kbd></span></div>
+    <div class="kbd-row"><span>This cheat-sheet</span><span class="kbd-keys"><kbd>?</kbd></span></div>
+    <div class="kbd-row"><span>Close</span><span class="kbd-keys"><kbd>Esc</kbd></span></div>
+  </div>
+</div>
+
 </div>
 
 <script>
@@ -768,8 +892,12 @@ function renderWaveInto(ctx) {
     const h = Math.max(3, v * (H - MATRA_Y - 10));
     const x = i * slotW + (slotW - barW) / 2;
     const age = i / SLOTS;                       // older bars fade left
-    ctx.fillStyle = v > 0.02 ? color : P.faint;
-    ctx.globalAlpha = v > 0.02 ? 0.25 + 0.75 * age : 0.5;
+    const live = v > 0.02;
+    // Fresher, louder bars read brighter; the leading edge (right) is where the
+    // voice is happening now. The bloom itself is a cheap GPU glow on the whole
+    // canvas (see .wave-canvas filter), not a per-bar canvas shadow.
+    ctx.fillStyle    = live ? color : P.faint;
+    ctx.globalAlpha  = live ? 0.25 + 0.75 * age : 0.5;
     ctx.beginPath();
     ctx.roundRect(x, MATRA_Y, barW, h, [0, 0, barW / 2, barW / 2]);
     ctx.fill();
@@ -821,6 +949,7 @@ function waveTick(t) {
     lastPush = t;
   }
   setRing(displayLevel);
+  setHalo(displayLevel);
   drawWave();
   if (S.isListening) waveRaf = requestAnimationFrame(waveTick);
 }
@@ -829,6 +958,12 @@ function setRing(level) {
   const CIRC = 377;                              // 2πr, r=60
   document.getElementById('ringFill').style.strokeDashoffset =
     CIRC * (1 - Math.min(1, level));
+}
+
+// One shared level (0–1) on :root drives both the mic halo and the waveform's
+// GPU glow, so the whole interface breathes with the voice from one value.
+function setHalo(level) {
+  document.documentElement.style.setProperty('--level', Math.min(1, level).toFixed(3));
 }
 
 function onLevel(rms) { rawLevel = rms; }
@@ -882,8 +1017,9 @@ function refreshLiveEmpty() {
   const hasText = text || document.getElementById('livePartial').textContent;
   document.getElementById('liveText').classList.toggle('empty', !hasText);
   const words = text.trim() ? text.trim().split(/\s+/).length : 0;
-  document.getElementById('wordCount').textContent = words ? `· ${words} words` : '';
-  document.getElementById('undoBtn').style.display = segs.length ? '' : 'none';
+  document.getElementById('wordCount').textContent = words ? `· ${words} ${words === 1 ? 'word' : 'words'}` : '';
+  document.getElementById('undoBtn').style.display  = segs.length ? '' : 'none';
+  document.getElementById('clearBtn').style.display = segs.length ? '' : 'none';
 }
 
 function onPartial(text) {
@@ -893,12 +1029,33 @@ function onPartial(text) {
   box.scrollTop = box.scrollHeight;
 }
 
-function onTyped(text) {
+// Each confirmed segment is its own clickable span — click to copy just that
+// word/phrase. Kept in one builder so onTyped and renderSegs stay in sync.
+function makeSeg(text, leading, animate) {
   const seg = document.createElement('span');
   seg.className = 'seg';
-  seg.textContent = (segs.length ? ' ' : '') + text;
+  seg.textContent = (leading ? ' ' : '') + text;
+  seg.title = 'Click to copy';
+  seg.onclick = () => copySegment(seg, text);
+  if (!animate) seg.style.animation = 'none';
+  return seg;
+}
+
+function copySegment(span, text) {
+  const flash = () => {
+    span.classList.add('copied');
+    setTimeout(() => span.classList.remove('copied'), 700);
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text).then(flash).catch(() => fallbackCopy(text, flash));
+  } else {
+    fallbackCopy(text, flash);
+  }
+}
+
+function onTyped(text) {
+  document.getElementById('liveConfirmed').appendChild(makeSeg(text, segs.length > 0, true));
   segs.push(text);
-  document.getElementById('liveConfirmed').appendChild(seg);
   document.getElementById('livePartial').textContent = '';
   refreshLiveEmpty();
   const box = document.getElementById('liveText');
@@ -908,11 +1065,7 @@ function onTyped(text) {
 function renderSegs() {
   const box = document.getElementById('liveConfirmed');
   box.textContent = '';
-  segs.forEach((text, i) => {
-    const seg = document.createElement('span');
-    seg.textContent = (i ? ' ' : '') + text;
-    box.appendChild(seg);
-  });
+  segs.forEach((text, i) => box.appendChild(makeSeg(text, i > 0, false)));
   refreshLiveEmpty();
 }
 
@@ -956,6 +1109,21 @@ function fallbackCopy(text, done) {
   try { document.execCommand('copy'); done(); } catch (e) {}
   ta.remove();
 }
+
+// Clears only the on-screen panel — the text already typed into the target app
+// is left exactly where it is.
+function clearTranscript() {
+  if (!segs.length) return;
+  resetLive();
+  setMsg('Transcript panel cleared — your typed text is untouched.');
+}
+
+// ── Keyboard shortcuts cheat-sheet ──────────────────────────────────────────
+function openShortcuts() {
+  document.getElementById('kbdHotkey').textContent = S.hotkey || 'Ctrl+Shift+V';
+  document.getElementById('shortcutsView').hidden = false;
+}
+function closeShortcuts() { document.getElementById('shortcutsView').hidden = true; }
 
 // ── Python callbacks ────────────────────────────────────────────────────────
 function onAutoStop(result) {
@@ -1019,6 +1187,7 @@ function buildPills() {
 }
 
 function setListeningUI() {
+  document.getElementById('appRoot').classList.add('listening');
   document.getElementById('micWrap').classList.add('listening');
   document.getElementById('miniView').classList.add('listening');
   document.getElementById('liveBox').classList.add('recording');
@@ -1035,6 +1204,7 @@ function setListeningUI() {
 }
 
 function setIdleUI() {
+  document.getElementById('appRoot').classList.remove('listening');
   document.getElementById('micWrap').classList.remove('listening');
   document.getElementById('miniView').classList.remove('listening');
   document.getElementById('liveBox').classList.remove('recording');
@@ -1043,6 +1213,7 @@ function setIdleUI() {
   stopTimer();
   cancelAnimationFrame(waveRaf);
   setRing(0);
+  setHalo(0);
   startIdleWave();
   setStatus('Ready');
   buildPills();
@@ -1290,12 +1461,31 @@ async function finishOnboarding() {
 }
 async function closeWin() { await window.pywebview.api.close_app(); }
 
-// Space toggles recording when the window itself is focused
+// Window-level shortcuts. Text fields opt out so typing a hotkey/custom word
+// never triggers an action.
 window.addEventListener('keydown', (e) => {
-  if (e.code === 'Space' && e.target === document.body) {
+  const typing = /^(INPUT|SELECT|TEXTAREA)$/.test(e.target.tagName);
+
+  // '?' toggles the cheat-sheet from anywhere but a text field
+  if (e.key === '?' && !typing) {
     e.preventDefault();
-    toggleListen();
+    document.getElementById('shortcutsView').hidden ? openShortcuts() : closeShortcuts();
+    return;
   }
+  if (e.key === 'Escape' && !document.getElementById('shortcutsView').hidden) {
+    closeShortcuts();
+    return;
+  }
+
+  // The rest apply only on the main view with nothing focused or open
+  const overlayOpen = !document.getElementById('settingsView').hidden
+                   || !document.getElementById('onboardView').hidden
+                   || !document.getElementById('shortcutsView').hidden;
+  if (overlayOpen || e.target !== document.body) return;
+
+  if (e.code === 'Space')                      { e.preventDefault(); toggleListen(); }
+  else if (e.key === 'c' || e.key === 'C')     { copyTranscript(); }
+  else if (e.key === 'u' || e.key === 'U')     { undoLast(); }
 });
 
 // ── Init ────────────────────────────────────────────────────────────────────
