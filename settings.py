@@ -4,7 +4,6 @@ from pathlib import Path
 
 _PATH = Path.home() / ".kothon" / "settings.json"
 
-
 def load() -> dict:
     try:
         if _PATH.exists():
