@@ -2,6 +2,7 @@
 
 ## Prerequisites
 
+
 - Python 3.11 with project dependencies: `pip install -r requirements.txt`
 - PyInstaller: `pip install pyinstaller`
 - [Inno Setup 6](https://jrsoftware.org/isinfo.php) (for the installer)
